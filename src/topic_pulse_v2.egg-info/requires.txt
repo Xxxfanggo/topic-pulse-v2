@@ -1,0 +1,3 @@
+
+[minimax]
+langchain-openai>=0.2

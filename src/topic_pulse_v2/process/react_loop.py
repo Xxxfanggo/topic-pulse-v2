@@ -1,0 +1,303 @@
+"""ReAct-style agent business loop.
+
+The loop follows this shape:
+
+1. Build a prompt with user input, known tools, session context, and memories.
+2. Ask the LLM what to do next.
+3. If the LLM returns an action, execute the tool and append an observation.
+4. Repeat until the LLM returns a final answer or max steps is reached.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+from topic_pulse_v2.llm_call import LLMClient, Message
+from topic_pulse_v2.memory import MemoryStore
+from topic_pulse_v2.session import SessionManager, SessionStatus
+from topic_pulse_v2.tool_call import ToolCallRequest, ToolCallResult, ToolExecutor
+from topic_pulse_v2.tool_register import ToolRegistry
+
+
+@dataclass(slots=True)
+class ReActConfig:
+    """Runtime options for the ReAct loop."""
+
+    max_steps: int = 6
+    memory_limit: int = 5
+    save_user_input_to_memory: bool = False
+    save_final_answer_to_memory: bool = False
+    system_prompt: str = (
+        "你是一个 ReAct 智能体。请通过推理解决用户任务，必要时使用工具，"
+        "并给出最终回答。\n\n"
+        "当你需要使用工具时，只返回 JSON：\n"
+        '{"thought": "简短推理", "action": "工具名称", "arguments": {}}\n\n'
+        "当你已经完成任务时，只返回 JSON：\n"
+        
+        '{"thought": "简短推理", "final_answer": "给用户的回答"}'
+    )
+
+
+@dataclass(slots=True)
+class ReActStep:
+    """One model/tool iteration in a ReAct run."""
+
+    index: int
+    thought: str = ""
+    action: str | None = None
+    arguments: dict[str, Any] = field(default_factory=dict)
+    observation: Any = None
+    final_answer: str | None = None
+    raw_response: str = ""
+    tool_result: ToolCallResult | None = None
+
+
+@dataclass(slots=True)
+class ReActResult:
+    """Final result returned by the ReAct loop."""
+
+    answer: str
+    session_id: str | None
+    steps: list[ReActStep]
+    completed: bool
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class ReActAgent:
+    """A small ReAct agent process built on the scaffold modules."""
+
+    def __init__(
+        self,
+        *,
+        llm_client: LLMClient,
+        tool_registry: ToolRegistry,
+        memory_store: MemoryStore | None = None,
+        session_manager: SessionManager | None = None,
+        config: ReActConfig | None = None,
+    ) -> None:
+        self._llm_client = llm_client
+        self._tool_registry = tool_registry
+        self._tool_executor = ToolExecutor(tool_registry)
+        self._memory_store = memory_store
+        self._session_manager = session_manager
+        self._config = config or ReActConfig()
+
+    def run(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        session_id: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ReActResult:
+        if not user_id:
+            raise ValueError("user_id cannot be empty.")
+        if not query:
+            raise ValueError("query cannot be empty.")
+
+        session_id = self._ensure_session(session_id, user_id)
+        if self._memory_store and self._config.save_user_input_to_memory:
+            self._memory_store.save(user_id, query, metadata={"type": "user_input"})
+
+        messages = self._build_initial_messages(user_id, query, session_id)
+        steps: list[ReActStep] = []
+        answer = ""
+        completed = False
+
+        for index in range(1, self._config.max_steps + 1):
+            response = self._llm_client.call(
+                messages,
+                provider=provider,
+                model=model,
+                tools=self._tool_registry.as_llm_tools(),
+                metadata=metadata,
+            )
+            parsed = self._parse_response(response.content, response.tool_calls)
+            step = ReActStep(
+                index=index,
+                thought=parsed.get("thought", ""),
+                action=parsed.get("action"),
+                arguments=parsed.get("arguments", {}) or {},
+                final_answer=parsed.get("final_answer"),
+                raw_response=response.content,
+            )
+            steps.append(step)
+            messages.append(Message(role="assistant", content=response.content))
+
+            if step.final_answer is not None:
+                answer = step.final_answer
+                completed = True
+                break
+
+            if step.action:
+                tool_result = self._tool_executor.call_request(
+                    ToolCallRequest(name=step.action, arguments=step.arguments)
+                )
+                step.tool_result = tool_result
+                step.observation = (
+                    tool_result.result if tool_result.success else tool_result.error
+                )
+                messages.append(
+                    Message(
+                        role="user",
+                        name=step.action,
+                        content=self._format_observation(tool_result),
+                    )
+                )
+                continue
+
+            answer = response.content
+            completed = True
+            break
+
+        if not completed:
+            answer = "智能体已停止，因为达到了最大执行步数。"
+
+        if self._memory_store and self._config.save_final_answer_to_memory:
+            self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
+        self._finish_session(session_id, completed)
+
+        return ReActResult(
+            answer=answer,
+            session_id=session_id,
+            steps=steps,
+            completed=completed,
+            metadata={"max_steps": self._config.max_steps},
+        )
+
+    def _ensure_session(self, session_id: str | None, user_id: str) -> str | None:
+        if not self._session_manager:
+            return session_id
+        if session_id:
+            self._session_manager.set_context(session_id, "user_id", user_id)
+            return session_id
+        session = self._session_manager.create(context={"user_id": user_id})
+        return session.id
+
+    def _finish_session(self, session_id: str | None, completed: bool) -> None:
+        if not self._session_manager or not session_id:
+            return
+        status = SessionStatus.COMPLETED if completed else SessionStatus.FAILED
+        self._session_manager.transition(session_id, status)
+
+    def _build_initial_messages(
+        self,
+        user_id: str,
+        query: str,
+        session_id: str | None,
+    ) -> list[Message]:
+        tool_text = self._format_tools()
+        memory_text = self._format_memories(user_id, query)
+        session_text = self._format_session(session_id)
+
+        return [
+            Message(
+                role="system",
+                content=(
+                    f"{self._config.system_prompt}\n\n"
+                    f"可用工具：\n{tool_text}\n\n"
+                    f"相关记忆：\n{memory_text}\n\n"
+                    f"会话上下文：\n{session_text}"
+                ),
+            ),
+            Message(role="user", content=query),
+        ]
+
+    def _format_tools(self) -> str:
+        specs = self._tool_registry.list()
+        if not specs:
+            return "未注册任何工具。"
+        return "\n".join(
+            f"- {spec.name}: {spec.description or '暂无描述。'}"
+            for spec in specs
+        )
+
+    def _format_memories(self, user_id: str, query: str) -> str:
+        if not self._memory_store:
+            return "未配置记忆存储。"
+        memories = self._memory_store.search(
+            user_id,
+            query,
+            limit=self._config.memory_limit,
+        )
+        if not memories:
+            return "没有相关记忆。"
+        return "\n".join(f"- {record.content}" for record in memories)
+
+    def _format_session(self, session_id: str | None) -> str:
+        if not self._session_manager or not session_id:
+            return "没有会话上下文。"
+        session = self._session_manager.get(session_id)
+        return json.dumps(
+            {"id": session.id, "status": str(session.status), "context": session.context},
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def _parse_response(
+        cls,
+        content: str,
+        tool_calls: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if tool_calls:
+            first_call = tool_calls[0]
+            function = first_call.get("function", first_call)
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments or "{}")
+            return {
+                "thought": first_call.get("thought", ""),
+                "action": function.get("name"),
+                "arguments": arguments,
+            }
+
+        payload = cls._extract_json_object(content)
+        if payload is not None:
+            return payload
+
+        final_answer_match = re.search(
+            r"final\s*answer\s*:\s*(?P<answer>.+)",
+            content,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if final_answer_match:
+            return {"final_answer": final_answer_match.group("answer").strip()}
+
+        return {"final_answer": content.strip()}
+
+    @staticmethod
+    def _extract_json_object(content: str) -> dict[str, Any] | None:
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            stripped = re.sub(r"^```(?:json)?", "", stripped, flags=re.IGNORECASE).strip()
+            stripped = re.sub(r"```$", "", stripped).strip()
+
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
+            if not match:
+                return None
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return None
+
+        if not isinstance(parsed, dict):
+            return None
+        return parsed
+
+    @staticmethod
+    def _format_observation(tool_result: ToolCallResult) -> str:
+        payload = {
+            "tool": tool_result.name,
+            "success": tool_result.success,
+            "result": tool_result.result,
+            "error": tool_result.error,
+        }
+        return f"观察结果：{json.dumps(payload, ensure_ascii=False, default=str)}"
