@@ -17,6 +17,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="User input message.")
+    user_id: str = Field(min_length=1, description="Anonymous or logged-in user id.")
     session_id: str | None = Field(default=None, description="Optional chat session id.")
     history: list[ChatMessage] = Field(default_factory=list, description="Recent chat history.")
 
@@ -24,3 +25,6 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     session_id: str
+    user_id: str
+    completed: bool
+    steps: list[dict] = Field(default_factory=list)

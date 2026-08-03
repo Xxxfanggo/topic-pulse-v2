@@ -11,12 +11,23 @@ const suggestions = [
   '分析一条新闻的关键争议点',
 ];
 
+function getOrCreateUserId() {
+  const storageKey = 'topic_pulse_user_id';
+  const existing = window.localStorage.getItem(storageKey);
+  if (existing) return existing;
+  const generated =
+    window.crypto?.randomUUID?.() || `anonymous-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.localStorage.setItem(storageKey, generated);
+  return generated;
+}
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sessionId, setSessionId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [userId] = useState(getOrCreateUserId);
 
   async function sendMessage(text) {
     const message = text.trim();
@@ -31,11 +42,15 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
+          user_id: userId,
           session_id: sessionId,
           history: messages,
         }),
       });
       const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || '请求失败');
+      }
       setSessionId(data.session_id);
       setMessages([...nextMessages, { role: 'assistant', content: data.answer }]);
     } catch (error) {
