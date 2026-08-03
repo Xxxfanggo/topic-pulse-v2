@@ -16,6 +16,7 @@ function App() {
   const [input, setInput] = useState('');
   const [sessionId, setSessionId] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   async function sendMessage(text) {
     const message = text.trim();
@@ -53,7 +54,7 @@ function App() {
   }
 
   return (
-    <div className="shell">
+    <div className={`shell ${sidebarCollapsed ? 'sidebarCollapsed' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="avatar">T</div>
@@ -67,7 +68,15 @@ function App() {
 
       <main className="chat">
         <header className="topbar">
-          <button className="iconButton" aria-label="折叠侧边栏">☰</button>
+          <button
+            className="iconButton"
+            aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+            aria-pressed={sidebarCollapsed}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+          >
+            {sidebarCollapsed ? '☰' : '◐'}
+          </button>
           <div className="title">
             <strong>新对话</strong>
             <span>AI 生成内容请谨慎核实</span>

@@ -20,10 +20,20 @@ textarea {
 }
 
 .shell {
+  --sidebar-width: 260px;
+  --composer-width: min(820px, calc(100vw - var(--sidebar-width) - 96px));
+
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
   background: #fff;
+}
+
+.shell.sidebarCollapsed {
+  --sidebar-width: 0px;
+  --composer-width: min(820px, calc(100vw - 48px));
+
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .sidebar {
@@ -33,6 +43,14 @@ textarea {
   border-right: 1px solid #ececec;
   background: #fafafa;
   padding: 16px 12px;
+}
+
+.sidebarCollapsed .sidebar {
+  display: none;
+}
+
+.sidebarCollapsed .chat {
+  grid-column: 1;
 }
 
 .brand {
@@ -89,7 +107,7 @@ textarea {
 
 .topbar {
   display: grid;
-  grid-template-columns: 48px 1fr auto;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
   height: 54px;
   border-bottom: 1px solid #eeeeee;
@@ -105,10 +123,15 @@ textarea {
 }
 
 .iconButton {
+  display: grid;
+  place-items: center;
   width: 34px;
   height: 34px;
   border-radius: 8px;
   background: transparent;
+  color: #303236;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .iconButton:hover {
@@ -140,6 +163,8 @@ textarea {
 }
 
 .content {
+  display: grid;
+  justify-items: center;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -148,11 +173,13 @@ textarea {
 
 .empty {
   display: flex;
+  width: min(860px, 100%);
   min-height: calc(100vh - 280px);
   align-items: center;
   justify-content: center;
   flex-direction: column;
   gap: 28px;
+  text-align: center;
 }
 
 .empty h1 {
@@ -221,9 +248,9 @@ textarea {
 
 .composer {
   position: fixed;
-  left: calc(260px + 50%);
+  left: calc(var(--sidebar-width) + (100vw - var(--sidebar-width)) / 2);
   bottom: 24px;
-  width: min(940px, calc(100vw - 320px));
+  width: var(--composer-width);
   transform: translateX(-50%);
   border: 1px solid #e5e5e5;
   border-radius: 18px;
@@ -280,6 +307,9 @@ textarea {
 
 @media (max-width: 760px) {
   .shell {
+    --sidebar-width: 0px;
+    --composer-width: calc(100vw - 24px);
+
     grid-template-columns: 1fr;
   }
 
