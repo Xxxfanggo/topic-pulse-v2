@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from topic_pulse_v2.llm_call import LLMClient, Message
@@ -31,13 +32,27 @@ class ReActConfig:
     save_user_input_to_memory: bool = False
     save_final_answer_to_memory: bool = False
     system_prompt: str = (
-        "你是一个 ReAct 智能体。请通过推理解决用户任务，必要时使用工具，"
+        "你是一个 ReAct逻辑的 智能体。请通过推理解决用户任务，必要时使用工具，"
         "并给出最终回答。\n\n"
+        "你的主要职责是‘热点信息跟踪’，针对用户想要了解的新闻话题，结合网络搜索、本地记忆的内容进行回复，帮助用户更加全面地了解新闻话题。\n\n"
+        
         "当你需要使用工具时，只返回 JSON：\n"
         '{"thought": "简短推理", "action": "工具名称", "arguments": {}}\n\n'
+        "action 必须使用可用工具列表中的英文 name 字段，例如 doubao_search 或 topic_markdown_store；"
+        "不要使用“豆包搜索工具”“话题记忆存储”等中文展示名。"
+        "只要决定使用工具，就必须输出带 action 的 JSON，不能只在 thought 中描述打算使用工具。\n\n"
         "当你已经完成任务时，只返回 JSON：\n"
+        '{"thought": "简短推理", "final_answer": "给用户的回答"}\n\n'
+        "最终回答必须是结构化数据。请把结构化结果作为 final_answer 的内容返回，final_answer 本身必须是合法 JSON 字符串。\n"
         
-        '{"thought": "简短推理", "final_answer": "给用户的回答"}'
+        f"当前系统时间是 {datetime.now()}\n\n"
+        "当用户描述词是'最近'、'近期'这类模糊时间，把时间转换成最近2个月。\n\n"
+        
+        "如果需要联网查询，请使用 doubao_search。\n"
+        "如果针对某一具体新闻话题进行联网搜索之后，需要使用 topic_markdown_store "
+        "记录该新闻话题的内容到本地记忆。\n"
+        "每次联网搜索到最新内容之后，需要使用 topic_markdown_store "
+        "将最新内容与本地已存储的记忆进行合并更新，保障存储记忆中的内容持续更新并且正确。\n\n"
     )
 
 
@@ -105,6 +120,8 @@ class ReActAgent:
             self._memory_store.save(user_id, query, metadata={"type": "user_input"})
 
         messages = self._build_initial_messages(user_id, query, session_id)
+        print("==============原始的prompt:==============")
+        print(self._format_prompt_for_debug(messages))
         steps: list[ReActStep] = []
         answer = ""
         completed = False
@@ -122,7 +139,11 @@ class ReActAgent:
                 index=index,
                 thought=parsed.get("thought", ""),
                 action=parsed.get("action"),
-                arguments=parsed.get("arguments", {}) or {},
+                arguments=self._repair_tool_arguments(
+                    parsed.get("action"),
+                    parsed.get("arguments", {}) or {},
+                    query,
+                ),
                 final_answer=parsed.get("final_answer"),
                 raw_response=response.content,
             )
@@ -208,6 +229,13 @@ class ReActAgent:
             Message(role="user", content=query),
         ]
 
+    @staticmethod
+    def _format_prompt_for_debug(messages: list[Message]) -> str:
+        return "\n\n".join(
+            f"[{message.role}]\n{message.content}"
+            for message in messages
+        )
+
     def _format_tools(self) -> str:
         specs = self._tool_registry.list()
         if not specs:
@@ -247,12 +275,17 @@ class ReActAgent:
         if tool_calls:
             first_call = tool_calls[0]
             function = first_call.get("function", first_call)
-            arguments = function.get("arguments", {})
+            arguments = (
+                function.get("arguments")
+                or function.get("args")
+                or first_call.get("args")
+                or {}
+            )
             if isinstance(arguments, str):
                 arguments = json.loads(arguments or "{}")
             return {
                 "thought": first_call.get("thought", ""),
-                "action": function.get("name"),
+                "action": function.get("name") or first_call.get("name"),
                 "arguments": arguments,
             }
 
@@ -271,6 +304,21 @@ class ReActAgent:
         return {"final_answer": content.strip()}
 
     @staticmethod
+    def _repair_tool_arguments(
+        action: str | None,
+        arguments: dict[str, Any],
+        query: str,
+    ) -> dict[str, Any]:
+        if not action:
+            return arguments
+        repaired = dict(arguments)
+        if action == "doubao_search" and not repaired.get("query"):
+            repaired["query"] = query
+        if action == "topic_markdown_store" and not repaired.get("topic_name"):
+            repaired["topic_name"] = query
+        return repaired
+
+    @staticmethod
     def _extract_json_object(content: str) -> dict[str, Any] | None:
         stripped = content.strip()
         if stripped.startswith("```"):
@@ -280,17 +328,58 @@ class ReActAgent:
         try:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
-            if not match:
-                return None
-            try:
-                parsed = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                return None
+            candidates = ReActAgent._extract_json_candidates(stripped)
+            preferred = [
+                item
+                for item in candidates
+                if isinstance(item, dict)
+                and ("action" in item or "final_answer" in item)
+            ]
+            if preferred:
+                return preferred[-1]
+            if candidates and isinstance(candidates[-1], dict):
+                return candidates[-1]
+            return None
 
         if not isinstance(parsed, dict):
             return None
         return parsed
+
+    @staticmethod
+    def _extract_json_candidates(content: str) -> list[Any]:
+        candidates: list[Any] = []
+        start: int | None = None
+        depth = 0
+        in_string = False
+        escaped = False
+        for index, char in enumerate(content):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+                continue
+            if char == "{":
+                if depth == 0:
+                    start = index
+                depth += 1
+                continue
+            if char == "}":
+                if depth == 0:
+                    continue
+                depth -= 1
+                if depth == 0 and start is not None:
+                    try:
+                        candidates.append(json.loads(content[start : index + 1]))
+                    except json.JSONDecodeError:
+                        pass
+                    start = None
+        return candidates
 
     @staticmethod
     def _format_observation(tool_result: ToolCallResult) -> str:

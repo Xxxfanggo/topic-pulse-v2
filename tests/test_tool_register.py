@@ -1,7 +1,11 @@
 import json
 import unittest
 
-from topic_pulse_v2.tool_register import DOUBAO_SEARCH_TOOL_NAME, ToolRegistry
+from topic_pulse_v2.tool_register import (
+    DOUBAO_SEARCH_TOOL_NAME,
+    TOPIC_MARKDOWN_STORE_TOOL_NAME,
+    ToolRegistry,
+)
 
 
 class ToolRegisterTests(unittest.TestCase):
@@ -21,6 +25,7 @@ class ToolRegisterTests(unittest.TestCase):
         spec = registry.get(DOUBAO_SEARCH_TOOL_NAME)
         self.assertEqual(spec.metadata["tool_display_name"], "豆包搜索")
         self.assertIn("query", spec.parameters["required"])
+        self.assertTrue(registry.has(TOPIC_MARKDOWN_STORE_TOOL_NAME))
 
 if __name__ == "__main__":
     unittest.main()

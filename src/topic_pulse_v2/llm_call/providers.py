@@ -42,6 +42,8 @@ class MiniMaxLLMProvider(LLMProvider):
     def call(self, request: LLMRequest) -> LLMResponse:
         client = self._client or self._build_client(request)
         messages = self._to_langchain_messages(request.messages)
+        if request.tools and hasattr(client, "bind_tools"):
+            client = client.bind_tools(request.tools)
         ai_message = client.invoke(messages)
         content = getattr(ai_message, "content", ai_message)
         response_metadata = getattr(ai_message, "response_metadata", {}) or {}
