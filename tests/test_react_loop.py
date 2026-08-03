@@ -17,7 +17,7 @@ class ReActLoopTests(unittest.TestCase):
         )
         session_manager = SessionManager()
         memory = InMemoryStore()
-        memory.save("user-1", "简要输出即可")
+        memory.save("user-1", "")
 
         result = ReActAgent(
             llm_client=llm_client,
@@ -27,7 +27,7 @@ class ReActLoopTests(unittest.TestCase):
             config=ReActConfig(
                 max_steps=5,
             ),
-        ).run(user_id="user-1", query="查询一下韩红最近的热点新闻")
+        ).run(user_id="user-1", query="李小璐出轨事件的内容总结")
 
 
 

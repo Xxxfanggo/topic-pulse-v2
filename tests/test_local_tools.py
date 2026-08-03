@@ -123,6 +123,40 @@ class LocalToolsTests(unittest.TestCase):
             for item in first["appended_items"]:
                 self.assertNotIn("note", item)
 
+    def test_topic_markdown_store_uses_web_results_when_hot_news_is_text(self):
+        latest_content = {
+            "hot_news": [
+                "AI裁员成为近期互联网行业关注焦点",
+                "部分公司调整组织结构",
+            ],
+            "web_results": [
+                {
+                    "publish_time": "2026-08-02T09:30:00+08:00",
+                    "title": "互联网大厂AI裁员观察",
+                    "summary": "多家互联网公司因AI提效调整岗位。",
+                    "source": "示例来源",
+                    "url": "https://example.com/ai-layoff",
+                }
+            ],
+            "summary": "互联网大厂AI裁员话题持续发酵。",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = topic_markdown_store(
+                "互联网大厂AI裁员",
+                latest_content=latest_content,
+                root_dir=temp_dir,
+                created_at="2026-08-03",
+            )
+
+            content = Path(result["path"]).read_text(encoding="utf-8")
+
+            self.assertEqual(result["appended_count"], 1)
+            self.assertEqual(result["timeline_count"], 1)
+            self.assertIn("互联网大厂AI裁员观察", content)
+            self.assertIn("- 来源：示例来源", content)
+            self.assertIn("- 链接：https://example.com/ai-layoff", content)
+
 
 if __name__ == "__main__":
     unittest.main()

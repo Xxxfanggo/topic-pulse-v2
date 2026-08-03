@@ -477,11 +477,27 @@ def _extract_timeline_items(content: dict[str, Any]) -> list[TimelineItem]:
 def _news_items(content: dict[str, Any]) -> list[Any]:
     if isinstance(content.get("result"), dict):
         return _news_items(content["result"])
+    collected: list[Any] = []
     for key in ("hot_news", "热点新闻汇总", "web_results", "items", "timeline_items", "时间线"):
         value = content.get(key)
         if isinstance(value, list):
-            return value
-    return []
+            collected.extend(value)
+    structured_items = [item for item in collected if _looks_like_timeline_source(item)]
+    return structured_items or collected
+
+
+def _looks_like_timeline_source(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    title = _item_value(item, "title", "Title", "topic", "事件", "标题")
+    if not title:
+        return False
+    return bool(
+        _item_value(item, "date", "日期", "time", "时间", "publish_time", "PublishTime")
+        or _item_value(item, "summary", "Summary", "snippet", "Snippet", "详情", "摘要")
+        or _item_value(item, "url", "Url", "链接")
+        or _item_value(item, "site", "site_name", "SiteName", "source", "来源")
+    )
 
 
 def _date_from_item(item: dict[str, Any]) -> str:

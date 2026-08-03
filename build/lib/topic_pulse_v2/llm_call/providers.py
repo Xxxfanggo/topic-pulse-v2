@@ -46,7 +46,7 @@ class MiniMaxLLMProvider(LLMProvider):
     Set ``MINIMAX_API_KEY`` in the environment, or pass ``api_key`` directly.
     """
 
-    DEFAULT_MODEL = "MiniMax-M2.7"
+    DEFAULT_MODEL = "MiniMax-M3"
     DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
 
     def __init__(

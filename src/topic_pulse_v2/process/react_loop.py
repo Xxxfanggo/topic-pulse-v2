@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from topic_pulse_v2.trace import log_event
 from topic_pulse_v2.llm_call import LLMClient, Message
 from topic_pulse_v2.memory import MemoryStore
 from topic_pulse_v2.session import SessionManager, SessionStatus
@@ -31,6 +32,7 @@ class ReActConfig:
     memory_limit: int = 5
     save_user_input_to_memory: bool = False
     save_final_answer_to_memory: bool = False
+    trace_log_path: str | None = "logs/react_trace.jsonl"
     system_prompt: str = (
         "你是一个 ReAct逻辑的 智能体。请通过推理解决用户任务，必要时使用工具，"
         "并给出最终回答。\n\n"
@@ -120,19 +122,45 @@ class ReActAgent:
             self._memory_store.save(user_id, query, metadata={"type": "user_input"})
 
         messages = self._build_initial_messages(user_id, query, session_id)
-        print("==============原始的prompt:==============")
-        print(self._format_prompt_for_debug(messages))
+
         steps: list[ReActStep] = []
         answer = ""
         completed = False
 
         for index in range(1, self._config.max_steps + 1):
+            tools = self._tool_registry.as_llm_tools()
+            log_event(
+                self._config.trace_log_path,
+                "llm_request",
+                session_id=session_id,
+                step_index=index,
+                data={
+                    "provider": provider,
+                    "model": model,
+                    "messages": [self._message_to_dict(message) for message in messages],
+                    "tools": tools,
+                    "metadata": metadata or {},
+                },
+            )
             response = self._llm_client.call(
                 messages,
                 provider=provider,
                 model=model,
-                tools=self._tool_registry.as_llm_tools(),
+                tools=tools,
                 metadata=metadata,
+            )
+            log_event(
+                self._config.trace_log_path,
+                "llm_response",
+                session_id=session_id,
+                step_index=index,
+                data={
+                    "content": response.content,
+                    "tool_calls": response.tool_calls,
+                    "usage": response.usage,
+                    "metadata": response.metadata,
+                    "model": response.model,
+                },
             )
             parsed = self._parse_response(response.content, response.tool_calls)
             step = ReActStep(
@@ -156,8 +184,36 @@ class ReActAgent:
                 break
 
             if step.action:
+                tool_request = ToolCallRequest(name=step.action, arguments=step.arguments)
+                log_event(
+                    self._config.trace_log_path,
+                    "tool_request",
+                    session_id=session_id,
+                    step_index=index,
+                    data={
+                        "name": tool_request.name,
+                        "arguments": tool_request.arguments,
+                        "call_id": tool_request.call_id,
+                        "metadata": tool_request.metadata,
+                    },
+                )
                 tool_result = self._tool_executor.call_request(
-                    ToolCallRequest(name=step.action, arguments=step.arguments)
+                    tool_request
+                )
+                log_event(
+                    self._config.trace_log_path,
+                    "tool_response",
+                    session_id=session_id,
+                    step_index=index,
+                    data={
+                        "name": tool_result.name,
+                        "success": tool_result.success,
+                        "result": tool_result.result,
+                        "error": tool_result.error,
+                        "call_id": tool_result.call_id,
+                        "elapsed_ms": tool_result.elapsed_ms,
+                        "metadata": tool_result.metadata,
+                    },
                 )
                 step.tool_result = tool_result
                 step.observation = (
@@ -182,6 +238,17 @@ class ReActAgent:
         if self._memory_store and self._config.save_final_answer_to_memory:
             self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
         self._finish_session(session_id, completed)
+        log_event(
+            self._config.trace_log_path,
+            "agent_finish",
+            session_id=session_id,
+            step_index=None,
+            data={
+                "answer": answer,
+                "completed": completed,
+                "max_steps": self._config.max_steps,
+            },
+        )
 
         return ReActResult(
             answer=answer,
@@ -265,6 +332,15 @@ class ReActAgent:
             {"id": session.id, "status": str(session.status), "context": session.context},
             ensure_ascii=False,
         )
+
+    @staticmethod
+    def _message_to_dict(message: Message) -> dict[str, Any]:
+        return {
+            "role": message.role,
+            "content": message.content,
+            "name": message.name,
+            "metadata": message.metadata,
+        }
 
     @classmethod
     def _parse_response(
