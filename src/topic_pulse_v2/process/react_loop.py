@@ -78,10 +78,12 @@ class ReActStep:
     action: str | None = None
     tool_call_id: str | None = None
     arguments: dict[str, Any] = field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
     observation: Any = None
     final_answer: str | None = None
     raw_response: str = ""
     tool_result: ToolCallResult | None = None
+    tool_results: list[ToolCallResult] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -176,18 +178,21 @@ class ReActAgent:
                 },
             )
             parsed = self._parse_response(response.content, response.tool_calls)
-            tool_call_id = self._tool_call_id(parsed, session_id, index)
+            step_tool_calls = self._parsed_tool_calls(
+                parsed,
+                session_id,
+                index,
+                query,
+                tool_observations,
+            )
+            first_tool_call = step_tool_calls[0] if step_tool_calls else {}
             step = ReActStep(
                 index=index,
                 thought=parsed.get("thought", ""),
-                action=parsed.get("action"),
-                tool_call_id=tool_call_id,
-                arguments=self._repair_tool_arguments(
-                    parsed.get("action"),
-                    parsed.get("arguments", {}) or {},
-                    query,
-                    tool_observations,
-                ),
+                action=first_tool_call.get("name"),
+                tool_call_id=first_tool_call.get("id"),
+                arguments=first_tool_call.get("args", {}),
+                tool_calls=step_tool_calls,
                 final_answer=parsed.get("final_answer"),
                 raw_response=response.content,
             )
@@ -198,10 +203,7 @@ class ReActAgent:
                     content=response.content,
                     metadata={
                         "tool_calls": self._assistant_tool_calls(
-                            response.tool_calls,
-                            step.action,
-                            step.arguments,
-                            tool_call_id,
+                            step.tool_calls,
                         )
                     },
                 )
@@ -212,56 +214,60 @@ class ReActAgent:
                 completed = True
                 break
 
-            if step.action:
-                tool_request = ToolCallRequest(
-                    name=step.action,
-                    arguments=step.arguments,
-                    call_id=step.tool_call_id,
-                )
-                log_event(
-                    self._config.trace_log_path,
-                    "tool_request",
-                    session_id=session_id,
-                    step_index=index,
-                    data={
-                        "name": tool_request.name,
-                        "arguments": tool_request.arguments,
-                        "call_id": tool_request.call_id,
-                        "metadata": tool_request.metadata,
-                    },
-                )
-                tool_result = self._tool_executor.call_request(
-                    tool_request
-                )
-                log_event(
-                    self._config.trace_log_path,
-                    "tool_response",
-                    session_id=session_id,
-                    step_index=index,
-                    data={
-                        "name": tool_result.name,
-                        "success": tool_result.success,
-                        "result": tool_result.result,
-                        "error": tool_result.error,
-                        "call_id": tool_result.call_id,
-                        "elapsed_ms": tool_result.elapsed_ms,
-                        "metadata": tool_result.metadata,
-                    },
-                )
-                step.tool_result = tool_result
-                step.observation = (
-                    tool_result.result if tool_result.success else tool_result.error
-                )
-                if tool_result.success:
-                    tool_observations[step.action] = tool_result.result
-                messages.append(
-                    Message(
-                        role="tool",
-                        name=step.action,
-                        tool_call_id=step.tool_call_id,
-                        content=self._format_observation(tool_result),
+            if step.tool_calls:
+                for tool_call in step.tool_calls:
+                    tool_request = ToolCallRequest(
+                        name=tool_call["name"],
+                        arguments=tool_call.get("args", {}),
+                        call_id=tool_call.get("id"),
                     )
-                )
+                    log_event(
+                        self._config.trace_log_path,
+                        "tool_request",
+                        session_id=session_id,
+                        step_index=index,
+                        data={
+                            "name": tool_request.name,
+                            "arguments": tool_request.arguments,
+                            "call_id": tool_request.call_id,
+                            "metadata": tool_request.metadata,
+                        },
+                    )
+                    tool_result = self._tool_executor.call_request(tool_request)
+                    log_event(
+                        self._config.trace_log_path,
+                        "tool_response",
+                        session_id=session_id,
+                        step_index=index,
+                        data={
+                            "name": tool_result.name,
+                            "success": tool_result.success,
+                            "result": tool_result.result,
+                            "error": tool_result.error,
+                            "call_id": tool_result.call_id,
+                            "elapsed_ms": tool_result.elapsed_ms,
+                            "metadata": tool_result.metadata,
+                        },
+                    )
+                    step.tool_results.append(tool_result)
+                    if step.tool_result is None:
+                        step.tool_result = tool_result
+                    if tool_result.success:
+                        self._remember_tool_observation(tool_observations, tool_result)
+                    messages.append(
+                        Message(
+                            role="tool",
+                            name=tool_result.name,
+                            tool_call_id=tool_result.call_id,
+                            content=self._format_observation(tool_result),
+                        )
+                    )
+                step.observation = [
+                    result.result if result.success else result.error
+                    for result in step.tool_results
+                ]
+                if len(step.observation) == 1:
+                    step.observation = step.observation[0]
                 continue
 
             answer = response.content
@@ -386,21 +392,14 @@ class ReActAgent:
         tool_calls: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if tool_calls:
-            first_call = tool_calls[0]
-            function = first_call.get("function", first_call)
-            arguments = (
-                function.get("arguments")
-                or function.get("args")
-                or first_call.get("args")
-                or {}
-            )
-            if isinstance(arguments, str):
-                arguments = json.loads(arguments or "{}")
+            normalized_calls = [cls._normalize_tool_call(call) for call in tool_calls]
+            first_call = normalized_calls[0]
             return {
-                "thought": first_call.get("thought", ""),
-                "action": function.get("name") or first_call.get("name"),
-                "arguments": arguments,
-                "tool_call_id": first_call.get("id") or function.get("id"),
+                "thought": tool_calls[0].get("thought", ""),
+                "action": first_call.get("name"),
+                "arguments": first_call.get("args", {}),
+                "tool_call_id": first_call.get("id"),
+                "tool_calls": normalized_calls,
             }
 
         payload = cls._extract_json_object(content)
@@ -418,6 +417,76 @@ class ReActAgent:
         return {"final_answer": content.strip()}
 
     @staticmethod
+    def _normalize_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
+        function = tool_call.get("function", tool_call)
+        arguments = (
+            function.get("arguments")
+            or function.get("args")
+            or tool_call.get("args")
+            or {}
+        )
+        if isinstance(arguments, str):
+            arguments = json.loads(arguments or "{}")
+        return {
+            "id": tool_call.get("id") or function.get("id"),
+            "name": function.get("name") or tool_call.get("name"),
+            "args": arguments,
+            "type": tool_call.get("type") or "tool_call",
+        }
+
+    @classmethod
+    def _parsed_tool_calls(
+        cls,
+        parsed: dict[str, Any],
+        session_id: str | None,
+        step_index: int,
+        query: str,
+        tool_observations: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        raw_calls = parsed.get("tool_calls")
+        if raw_calls:
+            calls = [cls._normalize_tool_call(call) for call in raw_calls]
+        elif parsed.get("action"):
+            calls = [
+                {
+                    "id": parsed.get("tool_call_id"),
+                    "name": parsed.get("action"),
+                    "args": parsed.get("arguments", {}) or {},
+                    "type": "tool_call",
+                }
+            ]
+        else:
+            return []
+
+        normalized_calls: list[dict[str, Any]] = []
+        for call_index, call in enumerate(calls, start=1):
+            action = call.get("name")
+            call_id = (
+                call.get("id")
+                or f"call_{session_id or uuid4()}_{step_index}_{call_index}"
+            )
+            normalized_calls.append(
+                {
+                    "id": call_id,
+                    "name": action,
+                    "args": cls._repair_tool_arguments(
+                        action,
+                        call.get("args", {}) or {},
+                        query,
+                        tool_observations,
+                    ),
+                    "type": call.get("type") or "tool_call",
+                }
+            )
+        return normalized_calls
+
+    @staticmethod
+    def _assistant_tool_calls(
+        tool_calls: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        return list(tool_calls or [])
+
+    @staticmethod
     def _tool_call_id(
         parsed: dict[str, Any],
         session_id: str | None,
@@ -426,26 +495,6 @@ class ReActAgent:
         if not parsed.get("action"):
             return None
         return parsed.get("tool_call_id") or f"call_{session_id or uuid4()}_{step_index}"
-
-    @staticmethod
-    def _assistant_tool_calls(
-        response_tool_calls: list[dict[str, Any]] | None,
-        action: str | None,
-        arguments: dict[str, Any],
-        tool_call_id: str | None,
-    ) -> list[dict[str, Any]]:
-        if response_tool_calls:
-            return response_tool_calls
-        if not action or not tool_call_id:
-            return []
-        return [
-            {
-                "id": tool_call_id,
-                "name": action,
-                "args": arguments,
-                "type": "tool_call",
-            }
-        ]
 
     @staticmethod
     def _repair_tool_arguments(
@@ -475,6 +524,74 @@ class ReActAgent:
                     search_result,
                 )
         return repaired
+
+    @staticmethod
+    def _remember_tool_observation(
+        tool_observations: dict[str, Any],
+        tool_result: ToolCallResult,
+    ) -> None:
+        if tool_result.name != "doubao_search":
+            tool_observations[tool_result.name] = tool_result.result
+            return
+        previous = tool_observations.get(tool_result.name)
+        if previous is None:
+            tool_observations[tool_result.name] = tool_result.result
+            return
+        tool_observations[tool_result.name] = ReActAgent._merge_search_observations(
+            previous,
+            tool_result.result,
+        )
+
+    @staticmethod
+    def _merge_search_observations(previous: Any, current: Any) -> dict[str, Any]:
+        previous_items = ReActAgent._search_items_from_result(previous)
+        current_items = ReActAgent._search_items_from_result(current)
+        merged_items: list[Any] = []
+        seen: set[tuple[str, str]] = set()
+        for item in [*previous_items, *current_items]:
+            if not isinstance(item, dict):
+                merged_items.append(item)
+                continue
+            key = (
+                str(item.get("url") or item.get("Url") or item.get("title") or item.get("Title") or ""),
+                str(item.get("publish_time") or item.get("PublishTime") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_items.append(item)
+
+        base = dict(current) if isinstance(current, dict) else {}
+        if isinstance(previous, dict):
+            base.setdefault("queries", [])
+            base["queries"] = [
+                item
+                for item in [
+                    previous.get("query"),
+                    current.get("query") if isinstance(current, dict) else None,
+                ]
+                if item
+            ]
+            base.setdefault("search_results", [])
+            base["search_results"] = [previous, current]
+        base["web_results"] = merged_items
+        base["result_count"] = len(merged_items)
+        return base
+
+    @staticmethod
+    def _search_items_from_result(result: Any) -> list[Any]:
+        if isinstance(result, list):
+            return result
+        if not isinstance(result, dict):
+            return []
+        if isinstance(result.get("web_results"), list):
+            return result["web_results"]
+        if isinstance(result.get("items"), list):
+            return result["items"]
+        nested = result.get("result")
+        if isinstance(nested, dict):
+            return ReActAgent._search_items_from_result(nested)
+        return []
 
     @staticmethod
     def _latest_content_needs_search_result(value: Any) -> bool:

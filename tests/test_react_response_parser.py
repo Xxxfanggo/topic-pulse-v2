@@ -6,7 +6,7 @@ from topic_pulse_v2.process import ReActAgent
 class ReActResponseParserTests(unittest.TestCase):
     def test_parse_action_after_think_block(self):
         parsed = ReActAgent._parse_response(
-            '<think>需要使用豆包搜索工具查询最新新闻。</think>\n'
+            '<think>需要使用豆包搜索工具查询最新新闻</think>\n'
             '{"thought": "需要联网查询", '
             '"action": "doubao_search", '
             '"arguments": {"query": "韩红最近热点新闻"}}'
@@ -43,6 +43,30 @@ class ReActResponseParserTests(unittest.TestCase):
         self.assertEqual(parsed["arguments"]["query"], "韩红最近热点新闻")
         self.assertEqual(parsed["tool_call_id"], "call-1")
 
+    def test_parse_multiple_langchain_tool_calls(self):
+        parsed = ReActAgent._parse_response(
+            "",
+            [
+                {
+                    "name": "doubao_search",
+                    "args": {"query": "内存条价格走势"},
+                    "id": "call-1",
+                    "type": "tool_call",
+                },
+                {
+                    "name": "topic_markdown_read_summary",
+                    "args": {"query": "内存条价格走势"},
+                    "id": "call-2",
+                    "type": "tool_call",
+                },
+            ],
+        )
+
+        self.assertEqual(parsed["action"], "doubao_search")
+        self.assertEqual(parsed["arguments"]["query"], "内存条价格走势")
+        self.assertEqual(len(parsed["tool_calls"]), 2)
+        self.assertEqual(parsed["tool_calls"][1]["name"], "topic_markdown_read_summary")
+
     def test_repair_doubao_search_arguments_uses_user_query(self):
         repaired = ReActAgent._repair_tool_arguments(
             "doubao_search",
@@ -59,10 +83,14 @@ class ReActResponseParserTests(unittest.TestCase):
             2,
         )
         tool_calls = ReActAgent._assistant_tool_calls(
-            [],
-            "doubao_search",
-            {"query": "测试"},
-            tool_call_id,
+            [
+                {
+                    "id": tool_call_id,
+                    "name": "doubao_search",
+                    "args": {"query": "测试"},
+                    "type": "tool_call",
+                }
+            ],
         )
 
         self.assertEqual(tool_call_id, "call_session-1_2")
