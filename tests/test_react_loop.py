@@ -25,9 +25,9 @@ class ReActLoopTests(unittest.TestCase):
             memory_store=memory,
             session_manager=session_manager,
             config=ReActConfig(
-                max_steps=5,
+                max_steps=20,
             ),
-        ).run(user_id="user-1", query="李小璐出轨事件的内容总结")
+        ).run(user_id="user-1", query="最近内存条价格怎么样了")
 
 
 

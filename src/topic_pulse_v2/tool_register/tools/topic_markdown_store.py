@@ -43,36 +43,52 @@ def topic_markdown_store(
     topic_name: str,
     *,
     latest_content: dict[str, Any] | list[Any] | str | None = None,
+    timeline_items: list[dict[str, Any]] | None = None,
     keywords: list[str] | None = None,
     summary: str | None = None,
     root_dir: str = DEFAULT_ROOT,
     current_status: str = "持续关注",
     created_at: str | None = None,
+    operation: str = "auto",
 ) -> dict[str, Any]:
     """Create or update a local Markdown memory file for a news topic."""
 
+    if operation not in {"auto", "create", "update"}:
+        raise ValueError("operation must be one of: auto, create, update.")
     store = _TopicMarkdownStore(root_dir)
     normalized_content = _normalize_latest_content(latest_content)
     inferred_keywords = keywords or _extract_keywords(normalized_content)
     inferred_summary = summary or _extract_summary(normalized_content)
-    timeline_items = _extract_timeline_items(normalized_content)
+    inferred_timeline_items = _timeline_items_from_payload(timeline_items) or _extract_timeline_items(normalized_content)
     topic_path = store.topic_path(topic_name)
     created = not topic_path.exists()
+    actual_operation = "create" if created else "update"
+    if operation == "update" and created:
+        raise FileNotFoundError(f"topic does not exist, cannot update: {topic_name}")
+    if operation == "create" and not created:
+        actual_operation = "update"
 
-    document_before = store.get_or_create_topic(
+    store.get_or_create_topic(
         topic_name,
         keywords=inferred_keywords,
         summary=inferred_summary,
         current_status=current_status,
         created_at=created_at,
     )
-    appended_items = store.append_timeline_items(topic_name, timeline_items)
+    if not created:
+        store.update_basic_info(
+            topic_name,
+            keywords=inferred_keywords,
+            current_status=current_status,
+        )
+    appended_items = store.append_timeline_items(topic_name, inferred_timeline_items)
     document_after = store.update_summary(topic_name, inferred_summary) if inferred_summary else store.read_topic(topic_name)
 
     return {
         "topic_name": document_after.name,
         "path": document_after.path,
         "created": created,
+        "operation": actual_operation,
         "keywords": document_after.keywords,
         "summary": document_after.summary,
         "appended_count": len(appended_items),
@@ -120,6 +136,14 @@ def register_topic_markdown_store_tool(
                         "或包含 hot_news/热点新闻汇总/web_results 等字段的对象。"
                     ),
                 },
+                "timeline_items": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": (
+                        "模型根据本地旧内容和联网新内容提炼后的时间线条目。"
+                        "每条建议包含 date/title/source/url/summary 字段；如果不传，会尝试从 latest_content 中提取。"
+                    ),
+                },
                 "keywords": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -138,6 +162,15 @@ def register_topic_markdown_store_tool(
                     "type": "string",
                     "description": "话题当前状态，默认持续关注。",
                     "default": "持续关注",
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": ["auto", "create", "update"],
+                    "description": (
+                        "写入操作。auto 表示文件不存在则创建、存在则更新；create 表示创建语义；"
+                        "update 表示必须更新已有文件，文件不存在会报错。"
+                    ),
+                    "default": "auto",
                 },
             },
             "required": ["topic_name"],
@@ -268,6 +301,24 @@ class _TopicMarkdownStore:
             SECTION_SUMMARY,
             f"\n{summary.strip() or '暂无摘要。'}\n",
         )
+        content = self._set_basic_info_value(content, "最近更新时间", self._now())
+        Path(document.path).write_text(content, encoding="utf-8")
+        return self.read_topic(topic_name)
+
+    def update_basic_info(
+        self,
+        topic_name: str,
+        *,
+        keywords: list[str] | None = None,
+        current_status: str | None = None,
+    ) -> TopicDocument:
+        document = self.read_topic(topic_name)
+        content = document.content
+        if keywords is not None:
+            keyword_text = "、".join(keyword.strip() for keyword in keywords if keyword.strip())
+            content = self._set_basic_info_value(content, "关键词", keyword_text)
+        if current_status is not None:
+            content = self._set_basic_info_value(content, "当前状态", current_status)
         content = self._set_basic_info_value(content, "最近更新时间", self._now())
         Path(document.path).write_text(content, encoding="utf-8")
         return self.read_topic(topic_name)
@@ -459,7 +510,7 @@ def _extract_timeline_items(content: dict[str, Any]) -> list[TimelineItem]:
     for item in _news_items(content):
         if not isinstance(item, dict):
             continue
-        title = str(_item_value(item, "title", "Title", "topic", "事件", "标题")).strip()
+        title = str(_item_value(item, "title", "Title", "topic", "event", "事件", "标题")).strip()
         if not title:
             continue
         items.append(
@@ -468,10 +519,31 @@ def _extract_timeline_items(content: dict[str, Any]) -> list[TimelineItem]:
                 title=title,
                 source=str(_item_value(item, "site", "site_name", "SiteName", "source", "来源")).strip(),
                 url=str(_item_value(item, "url", "Url", "链接")).strip(),
-                summary=str(_item_value(item, "summary", "Summary", "snippet", "Snippet", "详情", "摘要")).strip(),
+                summary=str(
+                    _item_value(
+                        item,
+                        "summary",
+                        "Summary",
+                        "snippet",
+                        "Snippet",
+                        "content",
+                        "Content",
+                        "detail",
+                        "details",
+                        "详情",
+                        "摘要",
+                        "关键进展",
+                    )
+                ).strip(),
             )
         )
     return items
+
+
+def _timeline_items_from_payload(items: list[dict[str, Any]] | None) -> list[TimelineItem]:
+    if not items:
+        return []
+    return _extract_timeline_items({"timeline_items": items})
 
 
 def _news_items(content: dict[str, Any]) -> list[Any]:
@@ -482,6 +554,10 @@ def _news_items(content: dict[str, Any]) -> list[Any]:
         value = content.get(key)
         if isinstance(value, list):
             collected.extend(value)
+        elif isinstance(value, dict):
+            nested_items = value.get("item") or value.get("items") or value.get("list") or value.get("data")
+            if isinstance(nested_items, list):
+                collected.extend(nested_items)
     structured_items = [item for item in collected if _looks_like_timeline_source(item)]
     return structured_items or collected
 
@@ -489,7 +565,7 @@ def _news_items(content: dict[str, Any]) -> list[Any]:
 def _looks_like_timeline_source(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
-    title = _item_value(item, "title", "Title", "topic", "事件", "标题")
+    title = _item_value(item, "title", "Title", "topic", "event", "事件", "标题")
     if not title:
         return False
     return bool(

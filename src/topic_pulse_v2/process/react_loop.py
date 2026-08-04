@@ -52,10 +52,14 @@ class ReActConfig:
         "当用户描述词是'最近'、'近期'这类模糊时间，把时间转换成最近2个月。\n\n"
         
         "如果需要联网查询，请使用 doubao_search。\n"
-        "如果针对某一具体新闻话题进行联网搜索之后，需要使用 topic_markdown_store "
-        "记录该新闻话题的内容到本地记忆。\n"
-        "每次联网搜索到最新内容之后，需要使用 topic_markdown_store "
-        "将最新内容与本地已存储的记忆进行合并更新，保障存储记忆中的内容持续更新并且正确。\n\n"
+        "如果针对某一具体新闻话题进行联网搜索之后，需要维护本地 Markdown 话题记忆，请严格按以下顺序使用工具：\n"
+        "1. 先调用 doubao_search 查询最新联网内容。\n"
+        "2. 再调用 topic_markdown_read_summary，读取 data/topics 下已有话题的标题、基本信息和摘要，判断是否已有相关本地记忆。\n"
+        "3. 如果发现相关本地话题，继续调用 topic_markdown_read_detail 读取完整 Markdown 内容；如果没有相关话题，则跳过详情读取。\n"
+        "4. 结合 doubao_search 的最新结果和本地 Markdown 旧内容，提炼出完整、去重、时间倒序的新增或更新内容。\n"
+        "5. 最后调用 topic_markdown_store。已有话题使用 operation=update，新话题使用 operation=create 或 auto；"
+        "写入时应优先传入提炼后的 timeline_items，并保留来源 source/site_name 与链接 url。\n"
+        "不要在 topic_markdown_store 的参数中使用 {\"...\": null} 等省略占位内容；如果搜索结果较长，也要提炼成具体条目后再写入。\n\n"
     )
 
 
@@ -128,6 +132,7 @@ class ReActAgent:
         steps: list[ReActStep] = []
         answer = ""
         completed = False
+        tool_observations: dict[str, Any] = {}
 
         for index in range(1, self._config.max_steps + 1):
             tools = self._tool_registry.as_llm_tools()
@@ -175,6 +180,7 @@ class ReActAgent:
                     parsed.get("action"),
                     parsed.get("arguments", {}) or {},
                     query,
+                    tool_observations,
                 ),
                 final_answer=parsed.get("final_answer"),
                 raw_response=response.content,
@@ -240,6 +246,8 @@ class ReActAgent:
                 step.observation = (
                     tool_result.result if tool_result.success else tool_result.error
                 )
+                if tool_result.success:
+                    tool_observations[step.action] = tool_result.result
                 messages.append(
                     Message(
                         role="tool",
@@ -438,15 +446,96 @@ class ReActAgent:
         action: str | None,
         arguments: dict[str, Any],
         query: str,
+        tool_observations: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not action:
             return arguments
         repaired = dict(arguments)
         if action == "doubao_search" and not repaired.get("query"):
             repaired["query"] = query
+        if action == "topic_markdown_read_summary" and not repaired.get("query"):
+            repaired["query"] = query
+        if action == "topic_markdown_read_detail" and not repaired.get("topic_name") and not repaired.get("path"):
+            repaired["topic_name"] = query
         if action == "topic_markdown_store" and not repaired.get("topic_name"):
             repaired["topic_name"] = query
+        if action == "topic_markdown_store":
+            search_result = (tool_observations or {}).get("doubao_search")
+            if search_result is not None and ReActAgent._latest_content_needs_search_result(
+                repaired.get("latest_content")
+            ):
+                repaired["latest_content"] = ReActAgent._merge_latest_content_with_search_result(
+                    repaired.get("latest_content"),
+                    search_result,
+                )
         return repaired
+
+    @staticmethod
+    def _latest_content_needs_search_result(value: Any) -> bool:
+        if value is None:
+            return True
+        if ReActAgent._contains_placeholder(value):
+            return True
+        if not isinstance(value, dict):
+            return True
+        web_results = value.get("web_results")
+        if isinstance(web_results, list):
+            return not ReActAgent._has_usable_search_items(web_results)
+        if isinstance(web_results, dict):
+            return not ReActAgent._has_usable_search_items(web_results.get("item"))
+        return True
+
+    @staticmethod
+    def _contains_placeholder(value: Any) -> bool:
+        if isinstance(value, dict):
+            if "..." in value:
+                return True
+            return any(
+                key == "..." or ReActAgent._contains_placeholder(item)
+                for key, item in value.items()
+            )
+        if isinstance(value, list):
+            return any(ReActAgent._contains_placeholder(item) for item in value)
+        return False
+
+    @staticmethod
+    def _has_usable_search_items(value: Any) -> bool:
+        if not isinstance(value, list):
+            return False
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            if item.get("title") or item.get("Title"):
+                return True
+        return False
+
+    @staticmethod
+    def _merge_latest_content_with_search_result(
+        latest_content: Any,
+        search_result: Any,
+    ) -> dict[str, Any]:
+        merged = dict(latest_content) if isinstance(latest_content, dict) else {}
+        if isinstance(search_result, dict):
+            for key in ("query", "search_type", "result_count", "request_id"):
+                if key in search_result and key not in merged:
+                    merged[key] = search_result[key]
+            if isinstance(search_result.get("web_results"), list):
+                merged["web_results"] = search_result["web_results"]
+            elif isinstance(search_result.get("items"), list):
+                merged["web_results"] = search_result["items"]
+            elif isinstance(search_result.get("result"), dict):
+                result = search_result["result"]
+                if isinstance(result.get("web_results"), list):
+                    merged["web_results"] = result["web_results"]
+                elif isinstance(result.get("items"), list):
+                    merged["web_results"] = result["items"]
+            merged["doubao_search_result"] = search_result
+            return merged
+        if isinstance(search_result, list):
+            merged["web_results"] = search_result
+            return merged
+        merged["summary"] = merged.get("summary") or str(search_result)
+        return merged
 
     @staticmethod
     def _extract_json_object(content: str) -> dict[str, Any] | None:
