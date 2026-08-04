@@ -52,12 +52,18 @@ class ReActConfig:
         "当用户描述词是'最近'、'近期'这类模糊时间，把时间转换成最近2个月。\n\n"
         
         "如果需要联网查询，请使用 doubao_search。\n"
-        "如果针对某一具体新闻话题进行联网搜索之后，需要维护本地 Markdown 话题记忆，请严格按以下顺序使用工具：\n"
-        "1. 先调用 doubao_search 查询最新联网内容。\n"
-        "2. 再调用 topic_markdown_read_summary，读取 data/topics 下已有话题的标题、基本信息和摘要，判断是否已有相关本地记忆。\n"
-        "3. 如果发现相关本地话题，继续调用 topic_markdown_read_detail 读取完整 Markdown 内容；如果没有相关话题，则跳过详情读取。\n"
-        "4. 结合 doubao_search 的最新结果和本地 Markdown 旧内容，提炼出完整、去重、时间倒序的新增或更新内容。\n"
-        "5. 最后调用 topic_markdown_store。已有话题使用 operation=update，新话题使用 operation=create 或 auto；"
+        "Markdown 话题记忆的使用条件：只有两种情况允许写入或更新 Markdown 文件：\n"
+        "1. 用户明确表达想要长期关注、持续关注、跟踪、记录、保存、写入本地记忆、维护时间线等意图。\n"
+        "2. 用户虽然没有明确说关注，但本次输入命中了 data/topics 下已经存储的 Markdown 关注话题，例如“上次关注的内存条价格怎么样了”。\n"
+        "如果用户只是查询、了解、分析、总结一个从未存储过的普通话题，本次会话中直接回答用户即可，不要写入 Markdown 记忆。\n"
+        "为了判断是否命中已存储话题，遇到具体新闻话题、热点话题、最新进展查询，或者出现“上次、之前、关注过、那个话题、怎么样了、更新一下”等指代时，可以调用 topic_markdown_read_summary 读取本地话题摘要进行匹配。\n"
+        "如果 topic_markdown_read_summary 返回了相关候选话题，应调用 topic_markdown_read_detail 读取完整内容，再结合 doubao_search 的最新结果进行更新。\n"
+        "如果 topic_markdown_read_summary 没有返回相关候选，并且用户也没有明确关注/记录/保存意图，则不要调用 topic_markdown_store，只需要直接回答用户。\n"
+        "当需要维护本地 Markdown 话题记忆时，请按以下顺序使用工具：\n"
+        "1. 根据需要先调用 topic_markdown_read_summary 判断是否已有相关本地话题；如果需要最新信息，再调用 doubao_search 查询联网内容。\n"
+        "2. 如果发现相关本地话题，调用 topic_markdown_read_detail 读取完整 Markdown 内容。\n"
+        "3. 结合 doubao_search 的最新结果和本地 Markdown 旧内容，提炼出完整、去重、时间倒序的新增或更新内容。\n"
+        "4. 最后调用 topic_markdown_store。已有话题使用 operation=update，新话题使用 operation=create 或 auto；"
         "写入时应优先传入提炼后的 timeline_items，并保留来源 source/site_name 与链接 url。\n"
         "不要在 topic_markdown_store 的参数中使用 {\"...\": null} 等省略占位内容；如果搜索结果较长，也要提炼成具体条目后再写入。\n\n"
     )
@@ -133,9 +139,9 @@ class ReActAgent:
         answer = ""
         completed = False
         tool_observations: dict[str, Any] = {}
+        tools = self._tool_registry.as_llm_tools()
 
         for index in range(1, self._config.max_steps + 1):
-            tools = self._tool_registry.as_llm_tools()
             log_event(
                 self._config.trace_log_path,
                 "llm_request",
