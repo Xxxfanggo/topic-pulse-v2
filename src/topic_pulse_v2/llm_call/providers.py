@@ -90,11 +90,35 @@ class MiniMaxLLMProvider(LLMProvider):
         return ChatOpenAI(**options)
 
     @staticmethod
-    def _to_langchain_messages(messages: list[Message]) -> list[tuple[str, str]]:
-        role_map = {
-            "assistant": "assistant",
-            "system": "system",
-            "tool": "tool",
-            "user": "human",
-        }
-        return [(role_map[message.role], message.content) for message in messages]
+    def _to_langchain_messages(messages: list[Message]) -> list[Any]:
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+        converted = []
+        for message in messages:
+            if message.role == "system":
+                converted.append(SystemMessage(content=message.content))
+                continue
+            if message.role == "user":
+                converted.append(HumanMessage(content=message.content))
+                continue
+            if message.role == "assistant":
+                converted.append(
+                    AIMessage(
+                        content=message.content,
+                        tool_calls=message.metadata.get("tool_calls") or [],
+                    )
+                )
+                continue
+            if message.role == "tool":
+                if not message.tool_call_id:
+                    raise ValueError("Tool message requires tool_call_id.")
+                converted.append(
+                    ToolMessage(
+                        content=message.content,
+                        name=message.name,
+                        tool_call_id=message.tool_call_id,
+                    )
+                )
+                continue
+            raise ValueError(f"Unsupported message role: {message.role}")
+        return converted

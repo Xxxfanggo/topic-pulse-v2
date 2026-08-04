@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from topic_pulse_v2.trace import log_event
 from topic_pulse_v2.llm_call import LLMClient, Message
@@ -65,6 +66,7 @@ class ReActStep:
     index: int
     thought: str = ""
     action: str | None = None
+    tool_call_id: str | None = None
     arguments: dict[str, Any] = field(default_factory=dict)
     observation: Any = None
     final_answer: str | None = None
@@ -163,10 +165,12 @@ class ReActAgent:
                 },
             )
             parsed = self._parse_response(response.content, response.tool_calls)
+            tool_call_id = self._tool_call_id(parsed, session_id, index)
             step = ReActStep(
                 index=index,
                 thought=parsed.get("thought", ""),
                 action=parsed.get("action"),
+                tool_call_id=tool_call_id,
                 arguments=self._repair_tool_arguments(
                     parsed.get("action"),
                     parsed.get("arguments", {}) or {},
@@ -176,7 +180,20 @@ class ReActAgent:
                 raw_response=response.content,
             )
             steps.append(step)
-            messages.append(Message(role="assistant", content=response.content))
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=response.content,
+                    metadata={
+                        "tool_calls": self._assistant_tool_calls(
+                            response.tool_calls,
+                            step.action,
+                            step.arguments,
+                            tool_call_id,
+                        )
+                    },
+                )
+            )
 
             if step.final_answer is not None:
                 answer = step.final_answer
@@ -184,7 +201,11 @@ class ReActAgent:
                 break
 
             if step.action:
-                tool_request = ToolCallRequest(name=step.action, arguments=step.arguments)
+                tool_request = ToolCallRequest(
+                    name=step.action,
+                    arguments=step.arguments,
+                    call_id=step.tool_call_id,
+                )
                 log_event(
                     self._config.trace_log_path,
                     "tool_request",
@@ -221,8 +242,9 @@ class ReActAgent:
                 )
                 messages.append(
                     Message(
-                        role="user",
+                        role="tool",
                         name=step.action,
+                        tool_call_id=step.tool_call_id,
                         content=self._format_observation(tool_result),
                     )
                 )
@@ -339,6 +361,7 @@ class ReActAgent:
             "role": message.role,
             "content": message.content,
             "name": message.name,
+            "tool_call_id": message.tool_call_id,
             "metadata": message.metadata,
         }
 
@@ -363,6 +386,7 @@ class ReActAgent:
                 "thought": first_call.get("thought", ""),
                 "action": function.get("name") or first_call.get("name"),
                 "arguments": arguments,
+                "tool_call_id": first_call.get("id") or function.get("id"),
             }
 
         payload = cls._extract_json_object(content)
@@ -378,6 +402,36 @@ class ReActAgent:
             return {"final_answer": final_answer_match.group("answer").strip()}
 
         return {"final_answer": content.strip()}
+
+    @staticmethod
+    def _tool_call_id(
+        parsed: dict[str, Any],
+        session_id: str | None,
+        step_index: int,
+    ) -> str | None:
+        if not parsed.get("action"):
+            return None
+        return parsed.get("tool_call_id") or f"call_{session_id or uuid4()}_{step_index}"
+
+    @staticmethod
+    def _assistant_tool_calls(
+        response_tool_calls: list[dict[str, Any]] | None,
+        action: str | None,
+        arguments: dict[str, Any],
+        tool_call_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if response_tool_calls:
+            return response_tool_calls
+        if not action or not tool_call_id:
+            return []
+        return [
+            {
+                "id": tool_call_id,
+                "name": action,
+                "args": arguments,
+                "type": "tool_call",
+            }
+        ]
 
     @staticmethod
     def _repair_tool_arguments(

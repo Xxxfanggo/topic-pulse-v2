@@ -17,6 +17,35 @@ class LLMCallTests(unittest.TestCase):
         with self.assertRaises(LookupError):
             client.call([Message(role="user", content="hello")])
 
+    def test_minimax_provider_converts_tool_message_with_call_id(self):
+        messages = MiniMaxLLMProvider._to_langchain_messages(
+            [
+                Message(
+                    role="assistant",
+                    content="",
+                    metadata={
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "name": "echo",
+                                "args": {"value": "测试"},
+                                "type": "tool_call",
+                            }
+                        ]
+                    },
+                ),
+                Message(
+                    role="tool",
+                    name="echo",
+                    tool_call_id="call-1",
+                    content='{"echo": "测试"}',
+                ),
+            ]
+        )
+
+        self.assertEqual(messages[0].tool_calls[0]["id"], "call-1")
+        self.assertEqual(messages[1].tool_call_id, "call-1")
+
     def test_minimax_provider_real_call(self):
         require_minimax_api_key(self)
         provider = MiniMaxLLMProvider()

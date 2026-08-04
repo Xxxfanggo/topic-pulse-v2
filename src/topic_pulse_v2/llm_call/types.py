@@ -15,6 +15,7 @@ class Message:
     role: Role
     content: str
     name: str | None = None
+    tool_call_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
