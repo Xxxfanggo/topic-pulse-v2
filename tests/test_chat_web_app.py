@@ -1,4 +1,6 @@
-﻿import unittest
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 
@@ -60,6 +62,29 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual(runtime.calls[0]["session_id"], "session-existing")
         self.assertEqual(runtime.calls[0]["metadata"]["source"], "web")
         self.assertEqual(runtime.calls[0]["metadata"]["history_length"], 1)
+
+    def test_topics_list_and_detail(self):
+        with TemporaryDirectory() as temp_dir:
+            topics_dir = Path(temp_dir)
+            topic_path = topics_dir / "测试话题.md"
+            topic_path.write_text("# 测试话题\n\n这是一段话题摘要。\n\n## 时间线\n\n- 节点", encoding="utf-8")
+
+            from topic_pulse_v2_chat.web import app as web_app
+
+            original_topics_dir = web_app.TOPICS_DIR
+            web_app.TOPICS_DIR = topics_dir
+            try:
+                client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
+
+                topics = client.get("/api/topics")
+                detail = client.get("/api/topics/%E6%B5%8B%E8%AF%95%E8%AF%9D%E9%A2%98")
+
+                self.assertEqual(topics.status_code, 200)
+                self.assertEqual(topics.json()["topics"][0]["title"], "测试话题")
+                self.assertEqual(detail.status_code, 200)
+                self.assertIn("这是一段话题摘要", detail.json()["content"])
+            finally:
+                web_app.TOPICS_DIR = original_topics_dir
 
 
 if __name__ == "__main__":

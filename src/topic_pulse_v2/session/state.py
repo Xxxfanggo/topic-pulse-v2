@@ -31,7 +31,7 @@ ALLOWED_TRANSITIONS: dict[SessionStatus, set[SessionStatus]] = {
         SessionStatus.CLOSED,
     },
     SessionStatus.PAUSED: {SessionStatus.ACTIVE, SessionStatus.CLOSED},
-    SessionStatus.COMPLETED: {SessionStatus.CLOSED},
+    SessionStatus.COMPLETED: {SessionStatus.ACTIVE, SessionStatus.CLOSED},
     SessionStatus.FAILED: {SessionStatus.ACTIVE, SessionStatus.CLOSED},
     SessionStatus.CLOSED: set(),
 }

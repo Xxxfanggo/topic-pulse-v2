@@ -31,6 +31,7 @@ class ReActConfig:
 
     max_steps: int = 6
     memory_limit: int = 5
+    session_history_limit: int = 12
     save_user_input_to_memory: bool = False
     save_final_answer_to_memory: bool = False
     trace_log_path: str | None = "logs/react_trace.jsonl"
@@ -279,6 +280,7 @@ class ReActAgent:
 
         if self._memory_store and self._config.save_final_answer_to_memory:
             self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
+        self._save_session_history(session_id, query, answer, completed)
         self._finish_session(session_id, completed)
         log_event(
             self._config.trace_log_path,
@@ -304,6 +306,13 @@ class ReActAgent:
         if not self._session_manager:
             return session_id
         if session_id:
+            session = self._session_manager.get(session_id)
+            if session.status in {
+                SessionStatus.COMPLETED,
+                SessionStatus.FAILED,
+                SessionStatus.PAUSED,
+            }:
+                self._session_manager.transition(session_id, SessionStatus.ACTIVE)
             self._session_manager.set_context(session_id, "user_id", user_id)
             return session_id
         session = self._session_manager.create(context={"user_id": user_id})
@@ -324,6 +333,7 @@ class ReActAgent:
         tool_text = self._format_tools()
         memory_text = self._format_memories(user_id, query)
         session_text = self._format_session(session_id)
+        history_messages = self._session_history_messages(session_id)
 
         return [
             Message(
@@ -335,8 +345,47 @@ class ReActAgent:
                     f"会话上下文：\n{session_text}"
                 ),
             ),
+            *history_messages,
             Message(role="user", content=query),
         ]
+
+    def _session_history_messages(self, session_id: str | None) -> list[Message]:
+        if not self._session_manager or not session_id:
+            return []
+        history = self._session_manager.get_history(
+            session_id,
+            limit=self._config.session_history_limit,
+        )
+        messages: list[Message] = []
+        for item in history:
+            if item.role not in {"user", "assistant"}:
+                continue
+            if not item.content:
+                continue
+            messages.append(Message(role=item.role, content=item.content))
+        return messages
+
+    def _save_session_history(
+        self,
+        session_id: str | None,
+        query: str,
+        answer: str,
+        completed: bool,
+    ) -> None:
+        if not self._session_manager or not session_id:
+            return
+        self._session_manager.append_history(
+            session_id,
+            "user",
+            query,
+            metadata={"type": "user_input"},
+        )
+        self._session_manager.append_history(
+            session_id,
+            "assistant",
+            answer,
+            metadata={"type": "final_answer", "completed": completed},
+        )
 
     @staticmethod
     def _format_prompt_for_debug(messages: list[Message]) -> str:

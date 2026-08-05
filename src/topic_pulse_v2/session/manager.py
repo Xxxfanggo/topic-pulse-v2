@@ -5,6 +5,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from .history import (
+    MarkdownSessionHistoryStore,
+    SessionHistoryStore,
+    SessionMessage,
+)
 from .state import Session, SessionStatus, utc_now
 
 
@@ -54,8 +59,13 @@ class InMemorySessionRepository(SessionRepository):
 class SessionManager:
     """High-level API for session lifecycle, context, and data."""
 
-    def __init__(self, repository: SessionRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: SessionRepository | None = None,
+        history_store: SessionHistoryStore | None = None,
+    ) -> None:
         self._repository = repository or InMemorySessionRepository()
+        self._history_store = history_store or MarkdownSessionHistoryStore()
 
     def create(
         self,
@@ -105,3 +115,36 @@ class SessionManager:
 
     def delete(self, session_id: str) -> None:
         self._repository.delete(session_id)
+        self._history_store.delete(session_id)
+
+    def append_history(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self._history_store.append(
+            session_id,
+            SessionMessage(
+                role=role,
+                content=content,
+                metadata=metadata or {},
+            ),
+        )
+
+    def append_history_many(
+        self,
+        session_id: str,
+        messages: list[SessionMessage],
+    ) -> None:
+        self._history_store.append_many(session_id, messages)
+
+    def get_history(
+        self,
+        session_id: str,
+        *,
+        limit: int | None = None,
+    ) -> list[SessionMessage]:
+        return self._history_store.list(session_id, limit=limit)

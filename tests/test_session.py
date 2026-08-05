@@ -33,6 +33,15 @@ class SessionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             manager.transition(session.id, SessionStatus.ACTIVE)
 
+    def test_completed_session_can_be_reactivated_for_next_turn(self):
+        manager = SessionManager()
+        session = manager.create()
+
+        manager.transition(session.id, SessionStatus.COMPLETED)
+        active = manager.transition(session.id, SessionStatus.ACTIVE)
+
+        self.assertEqual(active.status, SessionStatus.ACTIVE)
+
     def test_list_and_delete_sessions(self):
         manager = SessionManager()
         session = manager.create()
