@@ -1,6 +1,6 @@
 :root {
-  color: #17202a;
-  background: #f5f7f9;
+  color: #111827;
+  background: #f7f8fc;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Microsoft YaHei", sans-serif;
@@ -19,13 +19,14 @@ body {
 .appShell {
   min-height: 100vh;
   background:
-    linear-gradient(180deg, #ffffff 0%, #f7f9fb 48%, #eef3f5 100%),
-    radial-gradient(circle at 52% 18%, rgb(13 122 102 / 10%), transparent 30%);
+    radial-gradient(circle at 48% 6%, rgb(79 70 229 / 10%), transparent 28%),
+    radial-gradient(circle at 74% 22%, rgb(8 145 178 / 9%), transparent 26%),
+    linear-gradient(180deg, #ffffff 0%, #f7f8fc 46%, #eef2f7 100%);
 }
 
 .appSider {
-  border-right: 1px solid #e3e9ee;
-  box-shadow: 10px 0 30px rgb(25 43 56 / 3%);
+  border-right: 1px solid #e5e7f0;
+  box-shadow: 10px 0 30px rgb(17 24 39 / 4%);
   z-index: 2;
 }
 
@@ -35,8 +36,8 @@ body {
 }
 
 .brandAvatar {
-  background: #112333;
-  color: #f5c65c;
+  background: linear-gradient(135deg, #111827, #3730a3);
+  color: #a5f3fc;
   font-weight: 800;
 }
 
@@ -80,8 +81,8 @@ body {
 
 .sessionItem.active,
 .sessionItem:hover {
-  border-color: #d9e9e4;
-  background: #f6fbf9;
+  border-color: #dcdcff;
+  background: #f4f5ff;
 }
 
 .sessionCopy {
@@ -91,7 +92,7 @@ body {
 
 .visitorCard {
   margin-top: auto;
-  background: #fbfcfd;
+  background: #fbfcff;
 }
 
 .workspace {
@@ -107,7 +108,7 @@ body {
   align-items: center;
   gap: 14px;
   height: 64px;
-  border-bottom: 1px solid #e1e8ed;
+  border-bottom: 1px solid #e5e7f0;
   padding: 0 22px;
   backdrop-filter: blur(16px);
   z-index: 5;
@@ -154,11 +155,11 @@ body {
   width: min(520px, 100%);
   height: 76px;
   margin: 0 auto;
-  border: 1px solid #dfe9e5;
+  border: 1px solid #e0e7ff;
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgb(13 122 102 / 8%), rgb(245 198 92 / 14%)),
-    radial-gradient(circle at 20% 22%, rgb(57 115 157 / 10%), transparent 30%),
+    linear-gradient(135deg, rgb(79 70 229 / 9%), rgb(8 145 178 / 10%)),
+    radial-gradient(circle at 20% 22%, rgb(165 243 252 / 34%), transparent 30%),
     #ffffff;
   overflow: hidden;
 }
@@ -174,8 +175,8 @@ body {
   height: 16px;
   border: 3px solid #fff;
   border-radius: 50%;
-  background: #0d7a66;
-  box-shadow: 0 0 0 8px rgb(13 122 102 / 12%);
+  background: #4f46e5;
+  box-shadow: 0 0 0 8px rgb(79 70 229 / 12%);
   animation: breathe 2.8s ease-in-out infinite;
 }
 
@@ -187,23 +188,23 @@ body {
 .nodeB {
   left: 49%;
   top: 28%;
-  background: #d9991f !important;
-  box-shadow: 0 0 0 8px rgb(217 153 31 / 14%) !important;
+  background: #0891b2 !important;
+  box-shadow: 0 0 0 8px rgb(8 145 178 / 14%) !important;
   animation-delay: 350ms !important;
 }
 
 .nodeC {
   right: 18%;
   top: 58%;
-  background: #39739d !important;
-  box-shadow: 0 0 0 8px rgb(57 115 157 / 14%) !important;
+  background: #f59e0b !important;
+  box-shadow: 0 0 0 8px rgb(245 158 11 / 14%) !important;
   animation-delay: 700ms !important;
 }
 
 .pulseGraph .line {
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, transparent, #9fb9b1, transparent);
+  background: linear-gradient(90deg, transparent, #a5b4fc, transparent);
   transform-origin: left center;
 }
 
@@ -233,7 +234,7 @@ body {
 }
 
 .heroEyebrow {
-  color: #0d7a66;
+  color: #4f46e5;
   font-size: 13px;
   font-weight: 800;
 }
@@ -249,7 +250,7 @@ body {
 .heroCopy .ant-typography {
   max-width: 640px;
   margin-bottom: 0;
-  color: #64727f;
+  color: #64748b;
 }
 
 .promptGrid {
@@ -295,14 +296,14 @@ body {
 
 .messageAvatar {
   flex: 0 0 auto;
-  background: #e8f5f1;
-  color: #0d7a66;
+  background: #eef2ff;
+  color: #4f46e5;
   font-size: 12px;
   font-weight: 800;
 }
 
 .isUser .messageAvatar {
-  background: #112333;
+  background: #111827;
   color: #fff;
 }
 
@@ -318,13 +319,13 @@ body {
 }
 
 .bubbleCard {
-  border-color: #dde8e4;
-  box-shadow: 0 10px 28px rgb(28 44 56 / 6%);
+  border-color: #e3e7f2;
+  box-shadow: 0 10px 28px rgb(17 24 39 / 6%);
 }
 
 .isUser .bubbleCard {
-  border-color: #112333;
-  background: #112333;
+  border-color: #111827;
+  background: #111827;
 }
 
 .isUser .bubbleCard .ant-typography {
@@ -358,7 +359,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid #edf1f4;
+  border-bottom: 1px solid #edf0f7;
   padding-bottom: 10px;
 }
 
@@ -378,7 +379,7 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #0d7a66;
+  background: #4f46e5;
   animation: typing 1s infinite ease-in-out;
 }
 
@@ -391,8 +392,8 @@ body {
 }
 
 .insightSider {
-  border-left: 1px solid #e1e8ed;
-  background: #fbfcfd !important;
+  border-left: 1px solid #e5e7f0;
+  background: #fbfcff !important;
   padding: 18px;
 }
 
@@ -402,14 +403,14 @@ body {
 
 .panelText {
   margin-bottom: 0 !important;
-  color: #667480;
+  color: #64748b;
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
 
 .miniStat {
   flex: 1;
-  background: #f6f8fa;
+  background: #f7f8ff;
   text-align: center;
 }
 
@@ -425,9 +426,9 @@ body {
   bottom: 22px;
   width: min(840px, calc(100vw - 280px - 320px - 72px));
   transform: translateX(-50%);
-  border-color: #dce7ec;
+  border-color: #dfe3f4;
   background: rgb(255 255 255 / 94%);
-  box-shadow: 0 16px 44px rgb(21 36 48 / 16%);
+  box-shadow: 0 16px 44px rgb(31 41 55 / 14%);
   backdrop-filter: blur(18px);
   z-index: 10;
 }

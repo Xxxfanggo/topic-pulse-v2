@@ -79,9 +79,9 @@ const memories = [
 ];
 
 const signalMetrics = [
-  { label: '舆情热度', value: 82, color: '#d9991f' },
-  { label: '信源可信度', value: 76, color: '#39739d' },
-  { label: '争议强度', value: 58, color: '#0d7a66' },
+  { label: '舆情热度', value: 82, color: '#f59e0b' },
+  { label: '信源可信度', value: 76, color: '#0891b2' },
+  { label: '争议强度', value: 58, color: '#6366f1' },
 ];
 
 function getOrCreateUserId() {
@@ -236,16 +236,18 @@ function TopicPulseApp() {
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
-          colorPrimary: '#0d7a66',
-          colorInfo: '#39739d',
+          colorPrimary: '#4f46e5',
+          colorInfo: '#0891b2',
+          colorSuccess: '#10b981',
+          colorWarning: '#f59e0b',
           borderRadius: 8,
           fontFamily:
             'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
         },
         components: {
           Layout: {
-            bodyBg: '#f5f7f9',
-            headerBg: 'rgba(255,255,255,.86)',
+            bodyBg: '#f7f8fc',
+            headerBg: 'rgba(255,255,255,.88)',
             siderBg: '#ffffff',
           },
           Card: {
@@ -267,7 +269,7 @@ function TopicPulseApp() {
               </Avatar>
               <div className="brandCopy">
                 <Text strong>Topic Pulse</Text>
-                <Text type="secondary">舆情智能工作台</Text>
+                <Text type="secondary">告别信息差</Text>
               </div>
             </Flex>
 
@@ -350,7 +352,7 @@ function TopicPulseApp() {
                         className="promptCard"
                         onClick={() => sendMessage(item.prompt)}
                       >
-                        <Tag color="green">{item.label}</Tag>
+                        <Tag color="geekblue">{item.label}</Tag>
                         <Title level={5}>{item.title}</Title>
                         <Paragraph ellipsis={{ rows: 2 }}>{item.prompt}</Paragraph>
                       </Card>
@@ -440,7 +442,7 @@ function TopicPulseApp() {
                               {item.status}
                             </Text>
                           </div>
-                          <Tag color={item.score > 85 ? 'green' : 'blue'}>{item.score}</Tag>
+                          <Tag color={item.score > 85 ? 'geekblue' : 'cyan'}>{item.score}</Tag>
                         </div>
                       ))}
                     </div>
