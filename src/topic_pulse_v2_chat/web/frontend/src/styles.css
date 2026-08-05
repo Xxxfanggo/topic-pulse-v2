@@ -1,4 +1,7 @@
 :root {
+  --topbar-height: 64px;
+  --composer-reserve: 154px;
+
   color: #111827;
   background: #f7f8fc;
   font-family:
@@ -14,10 +17,12 @@
 
 body {
   margin: 0;
+  overflow: hidden;
 }
 
 .appShell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(circle at 48% 6%, rgb(79 70 229 / 10%), transparent 28%),
     radial-gradient(circle at 74% 22%, rgb(8 145 178 / 9%), transparent 26%),
@@ -25,13 +30,19 @@ body {
 }
 
 .appSider {
+  position: sticky !important;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
   border-right: 1px solid #e5e7f0;
   box-shadow: 10px 0 30px rgb(17 24 39 / 4%);
+  overflow: hidden;
   z-index: 2;
 }
 
 .siderInner {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   padding: 18px 14px;
 }
 
@@ -53,6 +64,9 @@ body {
 .siderSection {
   display: grid;
   gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .sectionTitle {
@@ -73,9 +87,15 @@ body {
   grid-template-columns: 24px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
+  width: 100%;
   border: 1px solid transparent;
   border-radius: 8px;
+  background: transparent;
   padding: 10px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   transition: background 160ms ease, border-color 160ms ease;
 }
 
@@ -90,6 +110,11 @@ body {
   min-width: 0;
 }
 
+.sessionHint {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
 .visitorCard {
   margin-top: auto;
   background: #fbfcff;
@@ -98,6 +123,28 @@ body {
 .workspace {
   position: relative;
   min-width: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.workspace::after {
+  content: "";
+  position: fixed;
+  left: 280px;
+  right: 320px;
+  bottom: 132px;
+  height: 48px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgb(247 248 252 / 0%), rgb(247 248 252 / 92%));
+  z-index: 9;
+}
+
+.workspace:has(.mainLayout.isTopicMode)::after {
+  display: none;
+}
+
+.ant-layout-sider-collapsed ~ .workspace::after {
+  left: 0;
 }
 
 .topbar {
@@ -107,7 +154,7 @@ body {
   grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
-  height: 64px;
+  height: var(--topbar-height);
   border-bottom: 1px solid #e5e7f0;
   padding: 0 22px;
   backdrop-filter: blur(16px);
@@ -127,14 +174,26 @@ body {
 }
 
 .mainLayout {
-  min-height: calc(100vh - 64px);
+  flex: 0 0 calc(100vh - var(--topbar-height) - var(--composer-reserve));
+  height: calc(100vh - var(--topbar-height) - var(--composer-reserve));
+  max-height: calc(100vh - var(--topbar-height) - var(--composer-reserve));
+  min-height: 0;
   background: transparent;
+  overflow: hidden;
+}
+
+.mainLayout.isTopicMode {
+  flex-basis: calc(100vh - var(--topbar-height));
+  height: calc(100vh - var(--topbar-height));
+  max-height: calc(100vh - var(--topbar-height));
 }
 
 .conversationPane {
   min-width: 0;
+  height: 100%;
+  min-height: 0;
   overflow: auto;
-  padding: 24px 28px 168px;
+  padding: 24px 28px;
 }
 
 .emptyCanvas,
@@ -146,7 +205,7 @@ body {
 .emptyCanvas {
   display: grid;
   align-content: center;
-  min-height: calc(100vh - 260px);
+  min-height: calc(100vh - var(--topbar-height) - var(--composer-reserve) - 48px);
   gap: 12px;
 }
 
@@ -284,6 +343,195 @@ body {
 .messageList {
   display: grid;
   gap: 18px;
+}
+
+.topicPage {
+  display: grid;
+  gap: 18px;
+  width: min(980px, 100%);
+  margin: 0 auto;
+  animation: pageIn 220ms ease-out;
+}
+
+.topicDetailPage {
+  width: min(1040px, 100%);
+}
+
+.topicDetailHero {
+  display: grid;
+  gap: 16px;
+  border: 1px solid #e3e7f2;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgb(79 70 229 / 6%), rgb(8 145 178 / 5%)),
+    rgb(255 255 255 / 72%);
+  box-shadow: 0 14px 40px rgb(17 24 39 / 5%);
+  padding: 16px 18px 18px;
+  backdrop-filter: blur(14px);
+}
+
+.topicBackButton {
+  width: fit-content;
+  height: 32px;
+  border: 1px solid #dfe3f4;
+  background: rgb(255 255 255 / 72%);
+  color: #475569;
+  font-weight: 600;
+  padding-inline: 10px 12px;
+}
+
+.topicBackButton:hover {
+  border-color: #c7d2fe !important;
+  background: #eef2ff !important;
+  color: #4f46e5 !important;
+}
+
+.topicDetailTitleRow {
+  min-width: 0;
+}
+
+.topicDetailTitleRow h2.ant-typography {
+  margin: 2px 0 2px;
+  color: #111827;
+  font-size: 30px;
+  line-height: 1.18;
+}
+
+.topicPageHeader {
+  min-height: 72px;
+}
+
+.topicPageHeader h2.ant-typography,
+.topicPageHeader h3.ant-typography {
+  margin: 2px 0 0;
+}
+
+.topicAlert {
+  border-radius: 8px;
+}
+
+.topicEmptyCard,
+.topicListCard,
+.topicDetailCard {
+  border-color: #e3e7f2;
+  box-shadow: 0 12px 34px rgb(17 24 39 / 5%);
+}
+
+.topicListGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.topicListCard {
+  overflow: hidden;
+}
+
+.topicListCard .ant-card-body {
+  padding: 18px;
+}
+
+.topicFileAvatar {
+  flex: 0 0 auto;
+  background: linear-gradient(135deg, #eef2ff, #ecfeff);
+  color: #4f46e5;
+}
+
+.topicListBody {
+  min-width: 0;
+  flex: 1;
+}
+
+.topicListBody h4.ant-typography {
+  margin: 0;
+  color: #111827;
+}
+
+.topicListBody .ant-typography {
+  margin-bottom: 8px;
+  color: #64748b;
+}
+
+.topicCardArrow {
+  color: #94a3b8;
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.topicListCard:hover .topicCardArrow {
+  color: #4f46e5;
+  transform: translateX(3px);
+}
+
+.topicDetailCard .ant-card-body {
+  padding: 28px;
+}
+
+.markdownView {
+  color: #1f2937;
+  line-height: 1.78;
+}
+
+.markdownView h1,
+.markdownView h2,
+.markdownView h3,
+.markdownView p {
+  margin: 0;
+}
+
+.markdownView h1 {
+  margin-bottom: 18px;
+  color: #111827;
+  font-size: 28px;
+  line-height: 1.25;
+}
+
+.markdownView h2 {
+  margin-top: 28px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #eef2ff;
+  color: #1e1b4b;
+  font-size: 20px;
+  padding-bottom: 8px;
+}
+
+.markdownView h3 {
+  margin-top: 22px;
+  margin-bottom: 10px;
+  color: #334155;
+  font-size: 16px;
+}
+
+.markdownView p {
+  color: #334155;
+  overflow-wrap: anywhere;
+}
+
+.markdownView a {
+  color: #4f46e5;
+  text-decoration: none;
+}
+
+.markdownView a:hover {
+  text-decoration: underline;
+}
+
+.markdownGap {
+  height: 10px;
+}
+
+.markdownBullet {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin: 7px 0;
+}
+
+.markdownBullet > span {
+  width: 6px;
+  height: 6px;
+  margin-top: 11px;
+  border-radius: 50%;
+  background: #818cf8;
 }
 
 .chatMessage {
@@ -426,9 +674,14 @@ body {
   bottom: 22px;
   width: min(840px, calc(100vw - 280px - 320px - 72px));
   transform: translateX(-50%);
-  border-color: #dfe3f4;
-  background: rgb(255 255 255 / 94%);
-  box-shadow: 0 16px 44px rgb(31 41 55 / 14%);
+  border-color: rgb(223 227 244 / 82%);
+  border-top-color: rgb(255 255 255 / 76%);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 84%), rgb(255 255 255 / 96%)),
+    rgb(255 255 255 / 94%);
+  box-shadow:
+    0 -12px 28px rgb(247 248 252 / 78%),
+    0 16px 44px rgb(31 41 55 / 14%);
   backdrop-filter: blur(18px);
   z-index: 10;
 }
@@ -474,10 +727,27 @@ body {
   }
 }
 
+@keyframes pageIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (max-width: 1199px) {
   .insightSider,
   .insightSider .ant-layout-sider-zero-width-trigger {
     display: none !important;
+  }
+
+  .workspace::after,
+  .ant-layout-sider-collapsed ~ .workspace::after {
+    left: 0;
+    right: 0;
   }
 
   .composerCard,
@@ -488,6 +758,11 @@ body {
 }
 
 @media (max-width: 768px) {
+  :root {
+    --topbar-height: 58px;
+    --composer-reserve: 138px;
+  }
+
   .appSider {
     display: none;
   }
@@ -498,7 +773,6 @@ body {
 
   .topbar {
     grid-template-columns: 40px minmax(0, 1fr) auto;
-    height: 58px;
     padding: 0 12px;
   }
 
@@ -506,8 +780,20 @@ body {
     display: none;
   }
 
+  .workspace::after,
+  .ant-layout-sider-collapsed ~ .workspace::after {
+    left: 0;
+    right: 0;
+    bottom: 118px;
+    height: 42px;
+  }
+
   .conversationPane {
-    padding: 22px 12px 156px;
+    padding: 22px 12px;
+  }
+
+  .mainLayout.isTopicMode .conversationPane {
+    padding-bottom: 28px;
   }
 
   .emptyCanvas {
@@ -524,6 +810,34 @@ body {
 
   .promptGrid {
     grid-template-columns: 1fr;
+  }
+
+  .topicPageHeader {
+    align-items: flex-start !important;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .topicDetailHero {
+    padding: 14px;
+  }
+
+  .topicDetailTitleRow {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
+  .topicDetailTitleRow h2.ant-typography {
+    font-size: 24px;
+  }
+
+  .topicListCard .ant-card-body,
+  .topicDetailCard .ant-card-body {
+    padding: 16px;
+  }
+
+  .markdownView h1 {
+    font-size: 24px;
   }
 
   .composerCard,

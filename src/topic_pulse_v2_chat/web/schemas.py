@@ -15,6 +15,11 @@ class ChatMessage(BaseModel):
     content: str = Field(description="Message content.")
 
 
+class SessionChatMessage(ChatMessage):
+    created_at: str
+    completed: bool | None = None
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="User input message.")
     user_id: str = Field(min_length=1, description="Anonymous or logged-in user id.")
@@ -28,3 +33,36 @@ class ChatResponse(BaseModel):
     user_id: str
     completed: bool
     steps: list[dict] = Field(default_factory=list)
+
+
+class TopicSummary(BaseModel):
+    id: str
+    title: str
+    filename: str
+    updated_at: str
+    size: int
+    preview: str = ""
+
+
+class TopicListResponse(BaseModel):
+    topics: list[TopicSummary] = Field(default_factory=list)
+
+
+class TopicDetailResponse(TopicSummary):
+    content: str
+
+
+class SessionSummary(BaseModel):
+    id: str
+    title: str
+    updated_at: str
+    message_count: int
+    preview: str = ""
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary] = Field(default_factory=list)
+
+
+class SessionDetailResponse(SessionSummary):
+    messages: list[SessionChatMessage] = Field(default_factory=list)

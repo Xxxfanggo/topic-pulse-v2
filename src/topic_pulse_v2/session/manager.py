@@ -87,6 +87,28 @@ class SessionManager:
     def get(self, session_id: str) -> Session:
         return self._repository.get(session_id)
 
+    def ensure(
+        self,
+        session_id: str,
+        *,
+        context: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        activate: bool = True,
+    ) -> Session:
+        try:
+            return self.get(session_id)
+        except LookupError:
+            session = Session(
+                id=session_id,
+                context=context or {},
+                data=data or {},
+                metadata=metadata or {},
+            )
+            if activate:
+                session.transition_to(SessionStatus.ACTIVE)
+            return self._repository.save(session)
+
     def list(self) -> list[Session]:
         return self._repository.list()
 

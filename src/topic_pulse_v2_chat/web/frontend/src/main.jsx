@@ -1,5 +1,6 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import {
   Avatar,
   Badge,
@@ -36,6 +37,9 @@ import {
   StarOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
+import TopicDetailPage from './pages/TopicDetailPage.jsx';
+import TopicListPage from './pages/TopicListPage.jsx';
+import { readApiResponse } from './utils/api.js';
 import './styles.css';
 
 const { Header, Sider, Content } = Layout;
@@ -66,12 +70,6 @@ const starterPrompts = [
   },
 ];
 
-const sessions = [
-  { key: 'active', label: 'AI 搜索产品竞品动态', time: '09:42', icon: <ThunderboltOutlined /> },
-  { key: 'policy', label: '短视频平台政策变化', time: '昨天', icon: <ClockCircleOutlined /> },
-  { key: 'chip', label: '芯片出口管制追踪', time: '周一', icon: <ClockCircleOutlined /> },
-];
-
 const memories = [
   { label: 'AI Agent 商业化', status: '活跃', score: 92 },
   { label: '大模型价格战', status: '升温', score: 87 },
@@ -91,6 +89,21 @@ function getOrCreateUserId() {
     window.crypto?.randomUUID?.() || `anonymous-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   window.localStorage.setItem(STORAGE_KEY, generated);
   return generated;
+}
+
+function formatSessionTime(value) {
+  if (!value) return '刚刚';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '刚刚';
+  const diffMs = Date.now() - date.getTime();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) return '刚刚';
+  if (diffMs < hour) return `${Math.max(1, Math.floor(diffMs / minute))} 分钟前`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)} 小时前`;
+  if (diffMs < 2 * day) return '昨天';
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 }
 
 function PulseGraph() {
@@ -152,8 +165,22 @@ function TopicPulseApp() {
   const [panelMode, setPanelMode] = useState('insight');
   const [tools, setTools] = useState({ web: true, memory: true });
   const [lastSteps, setLastSteps] = useState([]);
+  const [chatSessions, setChatSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState('');
+  const [topics, setTopics] = useState([]);
+  const [selectedTopic, setSelectedTopic] = useState(null);
+  const [topicsLoading, setTopicsLoading] = useState(false);
+  const [topicDetailLoading, setTopicDetailLoading] = useState(false);
+  const [topicsError, setTopicsError] = useState('');
   const [userId] = useState(getOrCreateUserId);
   const inputRef = useRef(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeView = location.pathname.startsWith('/topics') ? 'topics' : 'chat';
+  const routedTopicId = activeView === 'topics' && location.pathname.startsWith('/topics/')
+    ? decodeURIComponent(location.pathname.slice('/topics/'.length))
+    : '';
 
   const latestTopic = useMemo(() => {
     const latest = [...messages].reverse().find((item) => item.role === 'user');
@@ -161,12 +188,117 @@ function TopicPulseApp() {
   }, [messages]);
 
   function createNewChat() {
+    navigate('/chat');
     setMessages([]);
     setInput('');
     setSessionId(null);
     setLastSteps([]);
     inputRef.current?.focus?.();
   }
+
+  async function loadChatSessions() {
+    setSessionsLoading(true);
+    setSessionsError('');
+    try {
+      const response = await fetch('/api/sessions');
+      const data = await readApiResponse(response, '最近任务加载失败');
+      setChatSessions(data.sessions || []);
+    } catch (error) {
+      setSessionsError(error.message || '最近任务加载失败');
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function loadSessionDetail(nextSessionId) {
+    if (!nextSessionId || loading) return;
+    setSessionsError('');
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(nextSessionId)}`);
+      const data = await readApiResponse(response, '会话加载失败');
+      setSessionId(data.id);
+      setLastSteps([]);
+      setInput('');
+      setMessages(
+        (data.messages || [])
+          .filter((message) => message.role === 'user' || message.role === 'assistant')
+          .map((message) => ({
+            role: message.role,
+            content: message.content,
+            completed: message.completed,
+            at: message.created_at,
+          })),
+      );
+      navigate('/chat');
+    } catch (error) {
+      setSessionsError(error.message || '会话加载失败');
+    }
+  }
+
+  async function loadTopics() {
+    setTopicsLoading(true);
+    setTopicsError('');
+    try {
+      const response = await fetch('/api/topics');
+      const data = await readApiResponse(response, '话题列表加载失败');
+      setTopics(data.topics || []);
+    } catch (error) {
+      setTopicsError(error.message || '话题列表加载失败');
+    } finally {
+      setTopicsLoading(false);
+    }
+  }
+
+  async function loadTopicDetail(topicId) {
+    if (!topicId) return;
+    setTopicDetailLoading(true);
+    setTopicsError('');
+    try {
+      const response = await fetch(`/api/topics/${encodeURIComponent(topicId)}`);
+      const data = await readApiResponse(response, '话题详情加载失败');
+      setSelectedTopic(data);
+    } catch (error) {
+      setTopicsError(error.message || '话题详情加载失败');
+    } finally {
+      setTopicDetailLoading(false);
+    }
+  }
+
+  function selectTopic(topic) {
+    navigate(`/topics/${encodeURIComponent(topic.id)}`);
+  }
+
+  useEffect(() => {
+    if (location.pathname === '/') {
+      navigate('/chat', { replace: true });
+      return;
+    }
+    if (!location.pathname.startsWith('/chat') && !location.pathname.startsWith('/topics')) {
+      navigate('/chat', { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
+  useEffect(() => {
+    loadChatSessions();
+  }, []);
+
+  useEffect(() => {
+    if (activeView === 'topics') {
+      loadTopics();
+    }
+  }, [activeView]);
+
+  useEffect(() => {
+    if (activeView !== 'topics') {
+      setSelectedTopic(null);
+      return;
+    }
+    if (routedTopicId) {
+      loadTopicDetail(routedTopicId);
+    } else {
+      setSelectedTopic(null);
+    }
+  }, [activeView, routedTopicId]);
 
   async function copyMessage(content) {
     await window.navigator.clipboard?.writeText(content);
@@ -189,13 +321,9 @@ function TopicPulseApp() {
           message,
           user_id: userId,
           session_id: sessionId,
-          history: messages.map(({ role, content }) => ({ role, content })),
         }),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || '请求失败');
-      }
+      const data = await readApiResponse(response, '请求失败');
 
       setSessionId(data.session_id);
       setLastSteps(data.steps || []);
@@ -209,6 +337,7 @@ function TopicPulseApp() {
           at: new Date().toISOString(),
         },
       ]);
+      loadChatSessions();
     } catch (error) {
       setMessages([
         ...nextMessages,
@@ -227,8 +356,7 @@ function TopicPulseApp() {
 
   const menuItems = [
     { key: 'chat', icon: <MessageOutlined />, label: '当前对话' },
-    { key: 'memory', icon: <StarOutlined />, label: '话题记忆' },
-    { key: 'history', icon: <ClockCircleOutlined />, label: '搜索记录' },
+    { key: 'topics', icon: <StarOutlined />, label: '已关注话题' },
   ];
 
   return (
@@ -269,31 +397,57 @@ function TopicPulseApp() {
               </Avatar>
               <div className="brandCopy">
                 <Text strong>Topic Pulse</Text>
-                <Text type="secondary">告别信息差</Text>
+                <Text type="secondary">告别信息差~</Text>
               </div>
             </Flex>
 
             <Button type="primary" block icon={<PlusOutlined />} onClick={createNewChat}>
-              新建分析
+              新建对话
             </Button>
 
-            <Menu mode="inline" selectedKeys={['chat']} items={menuItems} className="navMenu" />
+            <Menu
+              mode="inline"
+              selectedKeys={[activeView === 'topics' ? 'topics' : 'chat']}
+              items={menuItems}
+              className="navMenu"
+              onClick={({ key }) => {
+                if (key === 'topics') {
+                  navigate('/topics');
+                } else {
+                  navigate('/chat');
+                }
+              }}
+            />
 
             <div className="siderSection">
               <Text type="secondary" className="sectionTitle">
                 最近任务
               </Text>
               <div className="sessionList">
-                {sessions.map((item) => (
-                  <div className={item.key === 'active' ? 'sessionItem active' : 'sessionItem'} key={item.key}>
-                    <Avatar size="small" icon={item.icon} />
+                {sessionsLoading && chatSessions.length === 0 && (
+                  <Text type="secondary" className="sessionHint">正在加载会话...</Text>
+                )}
+                {sessionsError && (
+                  <Text type="danger" className="sessionHint">{sessionsError}</Text>
+                )}
+                {!sessionsLoading && chatSessions.length === 0 && !sessionsError && (
+                  <Text type="secondary" className="sessionHint">暂无历史会话</Text>
+                )}
+                {chatSessions.map((item, index) => (
+                  <button
+                    type="button"
+                    className={item.id === sessionId ? 'sessionItem active' : 'sessionItem'}
+                    key={item.id}
+                    onClick={() => loadSessionDetail(item.id)}
+                  >
+                    <Avatar size="small" icon={index === 0 ? <ThunderboltOutlined /> : <ClockCircleOutlined />} />
                     <div className="sessionCopy">
-                      <Text ellipsis strong={item.key === 'active'}>
-                        {item.label}
+                      <Text ellipsis strong={item.id === sessionId}>
+                        {item.title}
                       </Text>
-                      <Text type="secondary">{item.time}</Text>
+                      <Text type="secondary">{formatSessionTime(item.updated_at)}</Text>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -321,8 +475,14 @@ function TopicPulseApp() {
               aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
             />
             <Flex vertical align="center" className="topTitle">
-              <Text strong>新对话</Text>
-              <Text type="secondary">{sessionId ? `会话 ${sessionId.slice(0, 12)}` : '准备接收新的热点分析任务'}</Text>
+              <Text strong>{activeView === 'topics' ? '已关注话题' : '新对话'}</Text>
+              <Text type="secondary">
+                {activeView === 'topics'
+                  ? selectedTopic?.title || '浏览 data/topics 中的 Markdown 话题'
+                  : sessionId
+                    ? `会话 ${sessionId.slice(0, 12)}`
+                    : '准备接收新的热点分析任务'}
+              </Text>
             </Flex>
             <Space>
               <Button icon={<ExportOutlined />}>导出</Button>
@@ -332,9 +492,25 @@ function TopicPulseApp() {
             </Space>
           </Header>
 
-          <Layout className="mainLayout">
+          <Layout className={`mainLayout ${activeView === 'topics' ? 'isTopicMode' : ''}`}>
             <Content className="conversationPane">
-              {messages.length === 0 ? (
+              {activeView === 'topics' ? (
+                routedTopicId ? (
+                  <TopicDetailPage
+                    topic={selectedTopic}
+                    loading={topicDetailLoading}
+                    onBack={() => navigate('/topics')}
+                  />
+                ) : (
+                  <TopicListPage
+                    topics={topics}
+                    loading={topicsLoading}
+                    error={topicsError}
+                    onReload={loadTopics}
+                    onSelectTopic={selectTopic}
+                  />
+                )
+              ) : messages.length === 0 ? (
                 <div className="emptyCanvas">
                   <PulseGraph />
                   <Flex vertical align="center" gap={6} className="heroCopy">
@@ -384,7 +560,7 @@ function TopicPulseApp() {
               )}
             </Content>
 
-            <Sider className="insightSider" width={320} breakpoint="xl" collapsedWidth={0}>
+            {activeView === 'chat' && <Sider className="insightSider" width={320} breakpoint="xl" collapsedWidth={0}>
               <Segmented
                 block
                 options={[
@@ -454,10 +630,10 @@ function TopicPulseApp() {
                   </Card>
                 </Flex>
               )}
-            </Sider>
+            </Sider>}
           </Layout>
 
-          <Card className="composerCard" variant="outlined">
+          {activeView === 'chat' && <Card className="composerCard" variant="outlined">
             <Input.TextArea
               ref={inputRef}
               value={input}
@@ -506,11 +682,15 @@ function TopicPulseApp() {
                 />
               </Space>
             </Flex>
-          </Card>
+          </Card>}
         </Layout>
       </Layout>
     </ConfigProvider>
   );
 }
 
-createRoot(document.getElementById('root')).render(<TopicPulseApp />);
+createRoot(document.getElementById('root')).render(
+  <BrowserRouter>
+    <TopicPulseApp />
+  </BrowserRouter>,
+);

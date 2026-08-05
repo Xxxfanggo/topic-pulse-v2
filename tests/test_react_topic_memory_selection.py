@@ -26,10 +26,12 @@ class ReActTopicMemorySelectionTests(unittest.TestCase):
             tool_registry=ToolRegistry(),
         )._config.system_prompt
 
-        self.assertIn("用户明确表达想要长期关注", prompt)
-        self.assertIn("命中了 data/topics 下已经存储的 Markdown 关注话题", prompt)
-        self.assertIn("没有返回相关候选，并且用户也没有明确关注", prompt)
-        self.assertIn("不要调用 topic_markdown_store", prompt)
+        self.assertIn("# 长期关注话题决策流程", prompt)
+        self.assertIn("如果用户明确表达“帮我关注”“持续关注”“长期跟踪”", prompt)
+        self.assertIn("必须先调用 topic_markdown_read_summary", prompt)
+        self.assertIn("禁止调用 topic_markdown_store", prompt)
+        self.assertIn("# 关键工具参数要求", prompt)
+        self.assertIn("doubao_search 时，arguments 必须包含 query", prompt)
 
 
 if __name__ == "__main__":

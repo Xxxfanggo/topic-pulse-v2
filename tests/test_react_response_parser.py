@@ -26,6 +26,16 @@ class ReActResponseParserTests(unittest.TestCase):
         self.assertEqual(parsed["action"], "topic_markdown_store")
         self.assertEqual(parsed["arguments"]["topic_name"], "韩红最近热点新闻")
 
+    def test_parse_final_answer_from_think_and_invalid_outer_json(self):
+        parsed = ReActAgent._parse_response(
+            '<think>用户说了"你好"</think>\n'
+            '{"thought":"用户说了"你好"，需要引导",'
+            '"final_answer":"{\\"summary\\":\\"你好，我可以帮你追踪热点。\\",'
+            '\\"items\\":[],\\"next_action\\":\\"请补充具体话题。\\"}"}'
+        )
+
+        self.assertIn("你好，我可以帮你追踪热点", parsed["final_answer"])
+
     def test_parse_langchain_tool_call_args_and_id(self):
         parsed = ReActAgent._parse_response(
             "<think>需要使用 doubao_search 查询。</think>",
