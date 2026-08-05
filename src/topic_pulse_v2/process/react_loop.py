@@ -17,6 +17,11 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from topic_pulse_v2.context_trim import (
+    ContextTrimRequest,
+    ContextTrimmer,
+    PassthroughContextTrimmer,
+)
 from topic_pulse_v2.trace import log_event
 from topic_pulse_v2.llm_call import LLMClient, Message
 from topic_pulse_v2.memory import MemoryStore
@@ -108,6 +113,7 @@ class ReActAgent:
         tool_registry: ToolRegistry,
         memory_store: MemoryStore | None = None,
         session_manager: SessionManager | None = None,
+        context_trimmer: ContextTrimmer | None = None,
         config: ReActConfig | None = None,
     ) -> None:
         self._llm_client = llm_client
@@ -115,6 +121,7 @@ class ReActAgent:
         self._tool_executor = ToolExecutor(tool_registry)
         self._memory_store = memory_store
         self._session_manager = session_manager
+        self._context_trimmer = context_trimmer or PassthroughContextTrimmer()
         self._config = config or ReActConfig()
 
     def run(
@@ -145,6 +152,18 @@ class ReActAgent:
         tools = self._tool_registry.as_llm_tools()
 
         for index in range(1, self._config.max_steps + 1):
+            context = self._context_trimmer.trim(
+                ContextTrimRequest(
+                    messages=messages,
+                    tools=tools,
+                    session_id=session_id,
+                    user_id=user_id,
+                    query=query,
+                    step_index=index,
+                    metadata=metadata or {},
+                )
+            )
+            llm_messages = context.messages
             log_event(
                 self._config.trace_log_path,
                 "llm_request",
@@ -153,13 +172,14 @@ class ReActAgent:
                 data={
                     "provider": provider,
                     "model": model,
-                    "messages": [self._message_to_dict(message) for message in messages],
+                    "messages": [self._message_to_dict(message) for message in llm_messages],
                     "tools": tools,
+                    "context_trim": context.metadata,
                     "metadata": metadata or {},
                 },
             )
             response = self._llm_client.call(
-                messages,
+                llm_messages,
                 provider=provider,
                 model=model,
                 tools=tools,
