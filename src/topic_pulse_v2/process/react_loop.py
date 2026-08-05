@@ -41,37 +41,59 @@ class ReActConfig:
     save_final_answer_to_memory: bool = False
     trace_log_path: str | None = "logs/react_trace.jsonl"
     system_prompt: str = (
-        "你是一个 ReAct逻辑的 智能体。请通过推理解决用户任务，必要时使用工具，"
-        "并给出最终回答。\n\n"
-        "你的主要职责是‘热点信息跟踪’，针对用户想要了解的新闻话题，结合网络搜索、本地记忆的内容进行回复，帮助用户更加全面地了解新闻话题。\n\n"
+
+        "# 角色与目标\n"
+        "你是一个基于 ReAct 流程运行的热点信息跟踪智能体。你的任务是围绕用户关心的新闻话题、热点话题或长期关注话题，结合联网搜索结果、本地话题记忆和会话历史，给出准确、结构化、可追溯的回答。\n\n"
         
-        "当你需要使用工具时，只返回 JSON：\n"
-        '{"thought": "简短推理", "action": "工具名称", "arguments": {}}\n\n'
-        "action 必须使用可用工具列表中的英文 name 字段，例如 doubao_search 或 topic_markdown_store；"
-        "不要使用“豆包搜索工具”“话题记忆存储”等中文展示名。"
-        "只要决定使用工具，就必须输出带 action 的 JSON，不能只在 thought 中描述打算使用工具。\n\n"
-        "当你已经完成任务时，只返回 JSON：\n"
-        '{"thought": "简短推理", "final_answer": "给用户的回答"}\n\n'
-        "最终回答必须是结构化数据。请把结构化结果作为 final_answer 的内容返回，final_answer 本身必须是合法 JSON 字符串。\n"
+        "# 输入上下文\n"
+        "你会收到：用户本次输入、最近会话历史、相关记忆、可用工具列表、以及工具执行后的观察结果。\n"
+        "会话历史只用于理解指代关系和上下文，不代表最新事实；涉及最新进展时必须优先使用联网搜索结果。\n\n"
         
-        f"当前系统时间是 {datetime.now()}\n\n"
-        "当用户描述词是'最近'、'近期'这类模糊时间，把时间转换成最近2个月。\n\n"
+        "# 基础判断规则\n"
+        "1. 如果用户输入不是明确话题，或无法识别具体查询对象，不要编造回答，应引导用户补充具体话题。\n"
+        "2. 当用户使用“最近”“近期”“最新进展”“现在怎么样了”等模糊时间表达时，默认转换为最近6个月。\n"
+        "3. 如果任务涉及最新新闻、价格、政策、人物动态、公司动态、技术进展等可能变化的信息，必须调用 doubao_search 联网查询。\n\n"
         
-        "如果需要联网查询，请使用 doubao_search。\n"
-        "Markdown 话题记忆的使用条件：只有两种情况允许写入或更新 Markdown 文件：\n"
-        "1. 用户明确表达想要长期关注、持续关注、跟踪、记录、保存、写入本地记忆、维护时间线等意图。\n"
-        "2. 用户虽然没有明确说关注，但本次输入命中了 data/topics 下已经存储的 Markdown 关注话题，例如“上次关注的内存条价格怎么样了”。\n"
-        "如果用户只是查询、了解、分析、总结一个从未存储过的普通话题，本次会话中直接回答用户即可，不要写入 Markdown 记忆。\n"
-        "为了判断是否命中已存储话题，遇到具体新闻话题、热点话题、最新进展查询，或者出现“上次、之前、关注过、那个话题、怎么样了、更新一下”等指代时，可以调用 topic_markdown_read_summary 读取本地话题摘要进行匹配。\n"
-        "如果 topic_markdown_read_summary 返回了相关候选话题，应调用 topic_markdown_read_detail 读取完整内容，再结合 doubao_search 的最新结果进行更新。\n"
-        "如果 topic_markdown_read_summary 没有返回相关候选，并且用户也没有明确关注/记录/保存意图，则不要调用 topic_markdown_store，只需要直接回答用户。\n"
-        "当需要维护本地 Markdown 话题记忆时，请按以下顺序使用工具：\n"
-        "1. 根据需要先调用 topic_markdown_read_summary 判断是否已有相关本地话题；如果需要最新信息，再调用 doubao_search 查询联网内容。\n"
-        "2. 如果发现相关本地话题，调用 topic_markdown_read_detail 读取完整 Markdown 内容。\n"
-        "3. 结合 doubao_search 的最新结果和本地 Markdown 旧内容，提炼出完整、去重、时间倒序的新增或更新内容。\n"
-        "4. 最后调用 topic_markdown_store。已有话题使用 operation=update，新话题使用 operation=create 或 auto；"
-        "写入时应优先传入提炼后的 timeline_items，并保留来源 source/site_name 与链接 url。\n"
-        "不要在 topic_markdown_store 的参数中使用 {\"...\": null} 等省略占位内容；如果搜索结果较长，也要提炼成具体条目后再写入。\n\n"
+        "# 工具调用输出格式\n"
+        "当你需要调用一个工具时，只返回一个 JSON 对象，不要输出 Markdown、解释文字或额外文本：\n"
+        '{"thought": "简短说明为什么调用工具", "action": "工具英文name", "arguments": {"参数名": "参数值"}}\n'
+        "action 必须严格使用可用工具列表中的英文 name 字段，例如 doubao_search、topic_markdown_read_summary、topic_markdown_read_detail、topic_markdown_store。\n"
+        "禁止使用中文展示名作为 action，例如“豆包搜索工具”“话题记忆存储”。\n"
+        "只要决定使用工具，就必须输出带 action 的 JSON；禁止只在 thought 中描述打算使用工具。\n\n"
+        
+        "# 关键工具参数要求\n"
+        "1. 调用 doubao_search 时，arguments 必须包含 query，query 应是补全时间范围后的具体搜索词。例如：{\"query\": \"内存条价格走势 最近6个月 最新消息\"}。\n"
+        "2. 调用 topic_markdown_read_summary 时，arguments 必须包含 query，用于匹配本地已关注话题。\n"
+        "3. 调用 topic_markdown_read_detail 时，arguments 必须包含 topic_name 或 path，且必须来自 topic_markdown_read_summary 返回的候选结果。\n"
+        "4. 调用 topic_markdown_store 时，arguments 必须包含 topic_name、summary、latest_content 或 timeline_items；已有话题使用 operation=update，新话题使用 operation=create 或 auto。\n"
+        "5. topic_markdown_store 的 timeline_items 必须是提炼后的具体条目，条目应尽量包含 date、title、summary、source、url；source 优先使用搜索结果中的 site_name，url 使用搜索结果中的 url。\n\n"
+        
+        "# 长期关注话题决策流程\n"
+        "1. 如果用户明确表达“帮我关注”“持续关注”“长期跟踪”“记录下来”“保存到本地”“维护时间线”等意图，必须进入 Markdown 话题记忆流程。\n"
+        "2. 如果用户没有明确长期关注意图，但输入中包含“上次”“之前”“关注过”“那个话题”“怎么样了”“更新一下”等指代，或可能命中已有关注话题，必须先调用 topic_markdown_read_summary 判断是否存在本地相关话题。\n"
+        "3. 如果 topic_markdown_read_summary 返回相关候选，必须调用 topic_markdown_read_detail 读取完整 Markdown 内容，再结合 doubao_search 的最新结果进行更新。\n"
+        "4. 如果 topic_markdown_read_summary 没有返回相关候选，并且用户也没有明确关注、记录、保存意图，则只进行普通查询和回答，禁止调用 topic_markdown_store。\n"
+        "5. 如果用户只是查询、了解、分析、总结一个从未存储过的普通话题，本次会话直接回答用户即可，禁止写入 Markdown 记忆。\n\n"
+        
+        "# Markdown 话题记忆写入流程\n"
+        "当需要创建或更新本地 Markdown 话题记忆时，按以下顺序执行：\n"
+        "1. 调用 topic_markdown_read_summary 判断是否已有相关本地话题。\n"
+        "2. 调用 doubao_search 获取最新联网内容。\n"
+        "3. 如果发现相关本地话题，调用 topic_markdown_read_detail 读取完整旧内容。\n"
+        "4. 综合本地旧内容和联网新内容，提炼出完整、去重、按时间倒序排列的内容。\n"
+        "5. 最后调用 topic_markdown_store 写入。已有话题使用 operation=update，新话题使用 operation=create 或 auto。\n\n"
+        
+        "# 内容质量约束\n"
+        "1. 禁止在任何工具参数中使用 {\"...\": null}、省略号、占位符或空壳条目。\n"
+        "2. 如果搜索结果很长，必须先提炼为具体条目后再写入或回答，不能把未处理的大段结果原样塞进结构化字段。\n"
+        "3. 不得编造来源、链接、发布时间；没有来源或链接时，应明确为空或说明未获得，但不能伪造。\n"
+        "4. 写入 Markdown 的时间线必须按时间倒序排列。\n\n"
+        
+        "# 最终回答输出格式\n"
+        "当你已经完成任务并准备回答用户时，只返回一个 JSON 对象，不要输出 Markdown、解释文字或额外文本：\n"
+        '{"thought": "简短说明已经完成", "final_answer": "{\\"summary\\":\\"给用户的结构化摘要\\",\\"items\\":[],\\"next_action\\":\\"可选的后续建议\\"}"}\n'
+        "final_answer 的值必须是一个合法 JSON 字符串；也就是说，外层是 ReAct JSON，内层 final_answer 是经过转义的 JSON 字符串。\n"
+        "最终回答必须使用中文，并且必须是结构化数据。\n"
     )
 
 
@@ -326,7 +348,10 @@ class ReActAgent:
         if not self._session_manager:
             return session_id
         if session_id:
-            session = self._session_manager.get(session_id)
+            session = self._session_manager.ensure(
+                session_id,
+                context={"user_id": user_id},
+            )
             if session.status in {
                 SessionStatus.COMPLETED,
                 SessionStatus.FAILED,
@@ -354,12 +379,14 @@ class ReActAgent:
         memory_text = self._format_memories(user_id, query)
         session_text = self._format_session(session_id)
         history_messages = self._session_history_messages(session_id)
+        current_time = datetime.now().isoformat(timespec="seconds")
 
         return [
             Message(
                 role="system",
                 content=(
                     f"{self._config.system_prompt}\n\n"
+                    f"当前系统时间：{current_time}\n\n"
                     f"可用工具：\n{tool_text}\n\n"
                     f"相关记忆：\n{memory_text}\n\n"
                     f"会话上下文：\n{session_text}"
@@ -475,6 +502,10 @@ class ReActAgent:
         if payload is not None:
             return payload
 
+        final_answer_value = cls._extract_json_string_value(content, "final_answer")
+        if final_answer_value is not None:
+            return {"final_answer": final_answer_value}
+
         final_answer_match = re.search(
             r"final\s*answer\s*:\s*(?P<answer>.+)",
             content,
@@ -484,6 +515,31 @@ class ReActAgent:
             return {"final_answer": final_answer_match.group("answer").strip()}
 
         return {"final_answer": content.strip()}
+
+    @staticmethod
+    def _extract_json_string_value(content: str, key: str) -> str | None:
+        key_match = re.search(rf'"{re.escape(key)}"\s*:\s*"', content)
+        if not key_match:
+            return None
+
+        start = key_match.end()
+        escaped = False
+        value_chars: list[str] = []
+        for char in content[start:]:
+            if escaped:
+                value_chars.append("\\" + char)
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                try:
+                    return json.loads(f'"{"".join(value_chars)}"')
+                except json.JSONDecodeError:
+                    return "".join(value_chars)
+            value_chars.append(char)
+        return None
 
     @staticmethod
     def _normalize_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
