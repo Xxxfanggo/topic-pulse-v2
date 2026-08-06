@@ -109,35 +109,18 @@ def _display_answer(answer: str) -> str:
     try:
         payload = json.loads(answer)
     except (TypeError, json.JSONDecodeError):
+        extracted_summary = _extract_json_text_field(answer, "summary", ("items", "next_action"))
+        if extracted_summary:
+            return extracted_summary
         return answer
     if not isinstance(payload, dict):
         return answer
 
-    parts: list[str] = []
     summary = str(payload.get("summary") or "").strip()
     if summary:
-        parts.append(summary)
+        return summary
 
-    items = payload.get("items")
-    if isinstance(items, list) and items:
-        lines = []
-        for item in items:
-            if isinstance(item, dict):
-                title = item.get("title") or item.get("name") or item.get("date")
-                detail = item.get("summary") or item.get("detail") or item.get("description")
-                line = "：".join(str(value).strip() for value in (title, detail) if value)
-                if line:
-                    lines.append(f"- {line}")
-            elif item:
-                lines.append(f"- {item}")
-        if lines:
-            parts.append("\n".join(lines))
-
-    next_action = str(payload.get("next_action") or "").strip()
-    if next_action:
-        parts.append(next_action)
-
-    return "\n\n".join(parts) or answer
+    return answer
 
 
 def _strip_think_blocks(content: str) -> str:
@@ -167,6 +150,37 @@ def _extract_json_string_value(content: str, key: str) -> str | None:
                 return "".join(value_chars)
         value_chars.append(char)
     return None
+
+
+def _extract_json_text_field(content: str, key: str, following_keys: tuple[str, ...]) -> str | None:
+    key_match = re.search(rf'"{re.escape(key)}"\s*:\s*"', content)
+    if not key_match:
+        return None
+
+    start = key_match.end()
+    end_candidates = [
+        match.start()
+        for following_key in following_keys
+        for match in (re.search(rf'"\s*,\s*"{re.escape(following_key)}"\s*:', content[start:]),)
+        if match
+    ]
+    if not end_candidates:
+        return None
+
+    raw_value = content[start : start + min(end_candidates)]
+    raw_value = raw_value.rstrip()
+    if raw_value.endswith('"'):
+        raw_value = raw_value[:-1]
+
+    try:
+        return json.loads(f'"{raw_value}"').strip()
+    except json.JSONDecodeError:
+        return (
+            raw_value.replace("\\n", "\n")
+            .replace('\\"', '"')
+            .replace("\\/", "/")
+            .strip()
+        )
 
 
 def _session_store() -> MarkdownSessionHistoryStore:

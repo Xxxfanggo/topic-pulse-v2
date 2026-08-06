@@ -39,6 +39,7 @@ import {
 } from '@ant-design/icons';
 import TopicDetailPage from './pages/TopicDetailPage.jsx';
 import TopicListPage from './pages/TopicListPage.jsx';
+import MarkdownView from './components/MarkdownView.jsx';
 import { readApiResponse } from './utils/api.js';
 import './styles.css';
 
@@ -131,7 +132,11 @@ function MessageBubble({ message, onCopy }) {
           {!isUser && message.completed === false && <Tag color="warning">未完成</Tag>}
         </Flex>
         <Card size="small" className="bubbleCard">
-          <Paragraph className="messageText">{message.content}</Paragraph>
+          {isUser || message.error ? (
+            <Paragraph className="messageText">{message.content}</Paragraph>
+          ) : (
+            <MarkdownView content={message.content} className="messageMarkdown" />
+          )}
           {!isUser && message.steps?.length > 0 && (
             <>
               <Divider className="compactDivider" />
@@ -178,6 +183,9 @@ function TopicPulseApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const activeView = location.pathname.startsWith('/topics') ? 'topics' : 'chat';
+  const routedSessionId = activeView === 'chat' && location.pathname.startsWith('/chat/')
+    ? decodeURIComponent(location.pathname.slice('/chat/'.length))
+    : '';
   const routedTopicId = activeView === 'topics' && location.pathname.startsWith('/topics/')
     ? decodeURIComponent(location.pathname.slice('/topics/'.length))
     : '';
@@ -229,7 +237,6 @@ function TopicPulseApp() {
             at: message.created_at,
           })),
       );
-      navigate('/chat');
     } catch (error) {
       setSessionsError(error.message || '会话加载失败');
     }
@@ -283,6 +290,13 @@ function TopicPulseApp() {
   }, []);
 
   useEffect(() => {
+    if (activeView !== 'chat' || !routedSessionId || routedSessionId === sessionId) {
+      return;
+    }
+    loadSessionDetail(routedSessionId);
+  }, [activeView, routedSessionId, sessionId]);
+
+  useEffect(() => {
     if (activeView === 'topics') {
       loadTopics();
     }
@@ -326,6 +340,9 @@ function TopicPulseApp() {
       const data = await readApiResponse(response, '请求失败');
 
       setSessionId(data.session_id);
+      if (data.session_id) {
+        navigate(`/chat/${encodeURIComponent(data.session_id)}`, { replace: true });
+      }
       setLastSteps(data.steps || []);
       setMessages([
         ...nextMessages,
@@ -436,13 +453,13 @@ function TopicPulseApp() {
                 {chatSessions.map((item, index) => (
                   <button
                     type="button"
-                    className={item.id === sessionId ? 'sessionItem active' : 'sessionItem'}
+                    className={item.id === (routedSessionId || sessionId) ? 'sessionItem active' : 'sessionItem'}
                     key={item.id}
-                    onClick={() => loadSessionDetail(item.id)}
+                    onClick={() => navigate(`/chat/${encodeURIComponent(item.id)}`)}
                   >
                     <Avatar size="small" icon={index === 0 ? <ThunderboltOutlined /> : <ClockCircleOutlined />} />
                     <div className="sessionCopy">
-                      <Text ellipsis strong={item.id === sessionId}>
+                      <Text ellipsis strong={item.id === (routedSessionId || sessionId)}>
                         {item.title}
                       </Text>
                       <Text type="secondary">{formatSessionTime(item.updated_at)}</Text>
