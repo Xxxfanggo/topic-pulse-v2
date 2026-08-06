@@ -276,10 +276,10 @@ function TopicPulseApp() {
     setSessionsError('');
     try {
       const response = await fetch('/api/sessions');
-      const data = await readApiResponse(response, '最近任务加载失败');
+      const data = await readApiResponse(response, '最近会话加载失败');
       setChatSessions(data.sessions || []);
     } catch (error) {
-      setSessionsError(error.message || '最近任务加载失败');
+      setSessionsError(error.message || '最近会话加载失败');
     } finally {
       setSessionsLoading(false);
     }
@@ -408,15 +408,25 @@ function TopicPulseApp() {
     }
   }, [activeView, routedTopicId]);
 
+  useEffect(() => {
+    if (activeView !== 'chat' || !routedSessionId || messages.length === 0 || loading) {
+      return;
+    }
+    scrollConversationToBottom('auto', 2);
+  }, [activeView, routedSessionId, messages.length, loading]);
+
   async function copyMessage(content) {
     await window.navigator.clipboard?.writeText(content);
   }
 
-  function scrollConversationToBottom(behavior = 'smooth') {
+  function scrollConversationToBottom(behavior = 'smooth', frames = 1) {
     window.requestAnimationFrame(() => {
       const pane = conversationPaneRef.current;
       if (!pane) return;
       pane.scrollTo({ top: pane.scrollHeight, behavior });
+      if (frames > 1) {
+        scrollConversationToBottom(behavior, frames - 1);
+      }
     });
   }
 
@@ -608,7 +618,7 @@ function TopicPulseApp() {
 
             <div className="siderSection">
               <Text type="secondary" className="sectionTitle">
-                最近任务
+                最近会话
               </Text>
               <div className="sessionList">
                 {sessionsLoading && chatSessions.length === 0 && (
