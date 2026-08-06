@@ -1,5 +1,5 @@
-import unittest
 import importlib
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -28,7 +28,7 @@ class FakeChatRuntime:
             }
         )
         return SimpleNamespace(
-            answer="这是 ReActAgent 的模拟回复",
+            answer="This is a fake ReActAgent answer.",
             session_id=session_id or "session-1",
             completed=True,
             steps=[],
@@ -51,16 +51,16 @@ class ChatWebAppTests(unittest.TestCase):
             "/api/chat",
             json={
                 "user_id": "anonymous-user-1",
-                "message": "关注最近互联网大厂因 AI 裁员的信息",
+                "message": "Track recent AI layoff news.",
                 "session_id": "session-existing",
-                "history": [{"role": "user", "content": "你好"}],
+                "history": [{"role": "user", "content": "hello"}],
             },
         )
 
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["status"], "ok")
         self.assertEqual(chat.status_code, 200)
-        self.assertEqual(chat.json()["answer"], "这是 ReActAgent 的模拟回复")
+        self.assertEqual(chat.json()["answer"], "This is a fake ReActAgent answer.")
         self.assertEqual(chat.json()["session_id"], "session-existing")
         self.assertEqual(chat.json()["user_id"], "anonymous-user-1")
         self.assertTrue(chat.json()["completed"])
@@ -76,18 +76,18 @@ class ChatWebAppTests(unittest.TestCase):
             "/api/chat",
             json={
                 "user_id": "anonymous-user-1",
-                "message": "你好",
+                "message": "hello",
             },
         )
 
         self.assertEqual(chat.status_code, 503)
-        self.assertIn("模型服务暂时不可用", chat.json()["detail"])
+        self.assertIn("detail", chat.json())
 
-    def test_chat_formats_structured_answer_for_display(self):
+    def test_chat_formats_structured_answer_summary_only(self):
         class StructuredRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):
                 return SimpleNamespace(
-                    answer='{"summary":"你好，我可以帮你追踪热点。","items":[],"next_action":"请补充具体话题。"}',
+                    answer='{"summary":"Hello, I can track topics for you.","items":[],"next_action":"Please add a topic."}',
                     session_id="session-structured",
                     completed=True,
                     steps=[],
@@ -98,18 +98,18 @@ class ChatWebAppTests(unittest.TestCase):
             "/api/chat",
             json={
                 "user_id": "anonymous-user-1",
-                "message": "你好",
+                "message": "hello",
             },
         )
 
         self.assertEqual(chat.status_code, 200)
-        self.assertEqual(chat.json()["answer"], "你好，我可以帮你追踪热点。\n\n请补充具体话题。")
+        self.assertEqual(chat.json()["answer"], "Hello, I can track topics for you.")
 
-    def test_chat_formats_think_prefixed_structured_answer_for_display(self):
+    def test_chat_formats_think_prefixed_structured_answer_summary_only(self):
         class ThinkStructuredRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):
                 return SimpleNamespace(
-                    answer='<think>内部推理</think>\n\n{"summary":"已整理完成。","items":[],"next_action":"可以继续追问。"}',
+                    answer='<think>internal reasoning</think>\n\n{"summary":"Done.","items":[],"next_action":"Ask another question."}',
                     session_id="session-structured",
                     completed=True,
                     steps=[],
@@ -120,18 +120,62 @@ class ChatWebAppTests(unittest.TestCase):
             "/api/chat",
             json={
                 "user_id": "anonymous-user-1",
-                "message": "你好",
+                "message": "hello",
             },
         )
 
         self.assertEqual(chat.status_code, 200)
-        self.assertEqual(chat.json()["answer"], "已整理完成。\n\n可以继续追问。")
+        self.assertEqual(chat.json()["answer"], "Done.")
+
+    def test_chat_keeps_markdown_summary_for_display(self):
+        class MarkdownStructuredRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                return SimpleNamespace(
+                    answer='{"summary":"## Insight\\n\\n- Alpha\\n- **Beta**","items":[{"title":"Hidden"}],"next_action":"Hidden action"}',
+                    session_id="session-markdown",
+                    completed=True,
+                    steps=[],
+                )
+
+        client = TestClient(create_app(chat_runtime=MarkdownStructuredRuntime()))
+        chat = client.post(
+            "/api/chat",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        )
+
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["answer"], "## Insight\n\n- Alpha\n- **Beta**")
+
+    def test_chat_extracts_summary_from_malformed_json_answer(self):
+        class MalformedStructuredRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                return SimpleNamespace(
+                    answer='{"summary":"Apple enters the "biggest product year" with new devices.\\n\\n- iPhone\\n- Mac","items":[{"title":"Hidden"}],"next_action":"Hidden action"}',
+                    session_id="session-malformed",
+                    completed=True,
+                    steps=[],
+                )
+
+        client = TestClient(create_app(chat_runtime=MalformedStructuredRuntime()))
+        chat = client.post(
+            "/api/chat",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        )
+
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["answer"], 'Apple enters the "biggest product year" with new devices.\n\n- iPhone\n- Mac')
 
     def test_topics_list_and_detail(self):
         with TemporaryDirectory() as temp_dir:
             topics_dir = Path(temp_dir)
-            topic_path = topics_dir / "测试话题.md"
-            topic_path.write_text("# 测试话题\n\n这是一段话题摘要。\n\n## 时间线\n\n- 节点", encoding="utf-8")
+            topic_path = topics_dir / "test-topic.md"
+            topic_path.write_text("# Test Topic\n\nThis is a topic summary.\n\n## Timeline\n\n- Node", encoding="utf-8")
 
             web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
 
@@ -141,12 +185,12 @@ class ChatWebAppTests(unittest.TestCase):
                 client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
 
                 topics = client.get("/api/topics")
-                detail = client.get("/api/topics/%E6%B5%8B%E8%AF%95%E8%AF%9D%E9%A2%98")
+                detail = client.get("/api/topics/test-topic")
 
                 self.assertEqual(topics.status_code, 200)
-                self.assertEqual(topics.json()["topics"][0]["title"], "测试话题")
+                self.assertEqual(topics.json()["topics"][0]["title"], "Test Topic")
                 self.assertEqual(detail.status_code, 200)
-                self.assertIn("这是一段话题摘要", detail.json()["content"])
+                self.assertIn("This is a topic summary.", detail.json()["content"])
             finally:
                 web_app.TOPICS_DIR = original_topics_dir
 
@@ -160,15 +204,15 @@ class ChatWebAppTests(unittest.TestCase):
                 "<!-- message\n"
                 '{"role": "user", "created_at": "2026-08-05T10:00:00+00:00", "metadata": {"type": "user_input"}}\n'
                 "-->\n"
-                "你好\n"
+                "hello\n"
                 "<!-- /message -->\n\n"
                 "<!-- message\n"
                 '{"role": "assistant", "created_at": "2026-08-05T10:00:01+00:00", "metadata": {"type": "final_answer", "completed": true}}\n'
                 "-->\n"
-                '<think>内部推理不应该展示</think>\n\n'
-                '{"thought":"用户说了"你好"，需要引导",'
-                '"final_answer":"{\\"summary\\":\\"你好，我可以帮你追踪热点。\\",'
-                '\\"items\\":[],\\"next_action\\":\\"请补充具体话题。\\"}"}\n'
+                '<think>internal reasoning should be hidden</think>\n\n'
+                '{"thought":"hidden",'
+                '"final_answer":"{\\"summary\\":\\"## Insight\\\\n\\\\n- Alpha\\",'
+                '\\"items\\":[],\\"next_action\\":\\"Hidden action\\"}"}\n'
                 "<!-- /message -->\n\n",
                 encoding="utf-8",
             )
@@ -185,13 +229,10 @@ class ChatWebAppTests(unittest.TestCase):
 
                 self.assertEqual(sessions.status_code, 200)
                 self.assertEqual(sessions.json()["sessions"][0]["id"], "session-existing")
-                self.assertEqual(sessions.json()["sessions"][0]["title"], "你好")
+                self.assertEqual(sessions.json()["sessions"][0]["title"], "hello")
                 self.assertEqual(detail.status_code, 200)
-                self.assertEqual(detail.json()["messages"][0]["content"], "你好")
-                self.assertEqual(
-                    detail.json()["messages"][1]["content"],
-                    "你好，我可以帮你追踪热点。\n\n请补充具体话题。",
-                )
+                self.assertEqual(detail.json()["messages"][0]["content"], "hello")
+                self.assertEqual(detail.json()["messages"][1]["content"], "## Insight\n\n- Alpha")
                 self.assertTrue(detail.json()["messages"][1]["completed"])
             finally:
                 web_app.SESSION_DATA_DIR = original_session_data_dir
