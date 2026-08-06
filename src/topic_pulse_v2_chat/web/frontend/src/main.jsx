@@ -584,7 +584,7 @@ function TopicPulseApp() {
               </Avatar>
               <div className="brandCopy">
                 <Text strong>Topic Pulse</Text>
-                <Text type="secondary">告别信息噪音</Text>
+                <Text type="secondary">告别信息焦虑~</Text>
               </div>
             </Flex>
 
