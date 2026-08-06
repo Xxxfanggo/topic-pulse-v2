@@ -105,6 +105,37 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual(chat.status_code, 200)
         self.assertEqual(chat.json()["answer"], "Hello, I can track topics for you.")
 
+    def test_chat_returns_search_reference_metadata(self):
+        class SearchReferenceRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                return SimpleNamespace(
+                    answer=(
+                        '{"summary":"搜索完成","items":[],'
+                        '"query_key":"内存条价格走势 最近6个月",'
+                        '"reference_data":[{"资料标题":"内存条价格持续上涨","资料链接":"https://example.com/news-1"}]}'
+                    ),
+                    session_id="session-search",
+                    completed=True,
+                    steps=[],
+                )
+
+        client = TestClient(create_app(chat_runtime=SearchReferenceRuntime()))
+        chat = client.post(
+            "/api/chat",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "查一下内存条价格走势",
+            },
+        )
+
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["answer"], "搜索完成")
+        self.assertEqual(chat.json()["query_key"], "内存条价格走势 最近6个月")
+        self.assertEqual(
+            chat.json()["reference_data"],
+            [{"title": "内存条价格持续上涨", "url": "https://example.com/news-1"}],
+        )
+
     def test_chat_formats_think_prefixed_structured_answer_summary_only(self):
         class ThinkStructuredRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):
@@ -170,6 +201,34 @@ class ChatWebAppTests(unittest.TestCase):
 
         self.assertEqual(chat.status_code, 200)
         self.assertEqual(chat.json()["answer"], 'Apple enters the "biggest product year" with new devices.\n\n- iPhone\n- Mac')
+
+    def test_chat_extracts_summary_from_nested_summary_json(self):
+        class NestedSummaryRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                return SimpleNamespace(
+                    answer=(
+                        '{"summary":"<think>hidden</think>\\n\\n'
+                        '{\\"summary\\": \\"Used iPhone 13 prices are roughly 1300-3000 RMB.\\", '
+                        '\\"items\\": [{\\"grade\\": \\"95 new\\"}], '
+                        '\\"next_action\\": \\"Beware of \\"trap phones\\"\\"}", '
+                        '"items": [], "next_action": "Hidden outer action"}'
+                    ),
+                    session_id="session-nested",
+                    completed=True,
+                    steps=[],
+                )
+
+        client = TestClient(create_app(chat_runtime=NestedSummaryRuntime()))
+        chat = client.post(
+            "/api/chat",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        )
+
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["answer"], "Used iPhone 13 prices are roughly 1300-3000 RMB.")
 
     def test_topics_list_and_detail(self):
         with TemporaryDirectory() as temp_dir:

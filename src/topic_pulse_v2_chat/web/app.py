@@ -106,21 +106,84 @@ def _display_answer(answer: str) -> str:
     if extracted_answer is not None:
         return _display_answer(extracted_answer)
 
-    try:
-        payload = json.loads(answer)
-    except (TypeError, json.JSONDecodeError):
+    payload = _answer_payload(answer)
+    if payload is None:
         extracted_summary = _extract_json_text_field(answer, "summary", ("items", "next_action"))
         if extracted_summary:
             return extracted_summary
         return answer
-    if not isinstance(payload, dict):
-        return answer
 
     summary = str(payload.get("summary") or "").strip()
     if summary:
-        return summary
+        nested_summary = _display_answer(summary)
+        return nested_summary if nested_summary != summary else summary
 
     return answer
+
+
+def _answer_payload(answer: str) -> dict | None:
+    answer = _strip_think_blocks(answer).strip()
+    extracted_answer = _extract_json_string_value(answer, "final_answer")
+    if extracted_answer is not None:
+        return _answer_payload(extracted_answer)
+
+    try:
+        payload = json.loads(answer)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("summary")
+    if isinstance(summary, str):
+        nested_payload = _answer_payload(summary)
+        if nested_payload and nested_payload.get("summary"):
+            merged = dict(nested_payload)
+            for key in ("query_key", "reference_data"):
+                if key not in merged and payload.get(key):
+                    merged[key] = payload[key]
+            return merged
+    return payload
+
+
+def _answer_query_key(answer: str) -> str | None:
+    payload = _answer_payload(answer)
+    if not payload:
+        return None
+    value = payload.get("query_key")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _answer_reference_data(answer: str) -> list[dict[str, str]]:
+    payload = _answer_payload(answer)
+    if not payload:
+        return []
+    references = payload.get("reference_data")
+    if not isinstance(references, list):
+        return []
+
+    normalized: list[dict[str, str]] = []
+    seen_links: set[str] = set()
+    for item in references:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("资料标题") or item.get("title")
+        link = item.get("资料链接") or item.get("url") or item.get("link")
+        if not title or not link:
+            continue
+        link_text = str(link).strip()
+        if not link_text or link_text in seen_links:
+            continue
+        seen_links.add(link_text)
+        normalized.append(
+            {
+                "title": str(title).strip(),
+                "url": link_text,
+            }
+        )
+    return normalized
 
 
 def _strip_think_blocks(content: str) -> str:
@@ -221,6 +284,8 @@ def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage
                 content=content,
                 created_at=message.created_at.isoformat(),
                 completed=message.metadata.get("completed"),
+                query_key=_answer_query_key(message.content) if message.role == "assistant" else None,
+                reference_data=_answer_reference_data(message.content) if message.role == "assistant" else [],
             )
         )
     return formatted
@@ -281,6 +346,8 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
             session_id=result.session_id or "",
             user_id=request.user_id,
             completed=result.completed,
+            query_key=_answer_query_key(result.answer),
+            reference_data=_answer_reference_data(result.answer),
             steps=react_result_steps_to_dict(result),
         )
 

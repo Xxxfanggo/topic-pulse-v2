@@ -32,6 +32,8 @@ class ReActTopicMemorySelectionTests(unittest.TestCase):
         self.assertIn("禁止调用 topic_markdown_store", prompt)
         self.assertIn("# 关键工具参数要求", prompt)
         self.assertIn("doubao_search 时，arguments 必须包含 query", prompt)
+        self.assertIn("title 和 url 两个英文 key", prompt)
+        self.assertIn("禁止使用中文 key", prompt)
 
 
 if __name__ == "__main__":

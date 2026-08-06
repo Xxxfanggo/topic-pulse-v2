@@ -33,6 +33,7 @@ import {
   MenuUnfoldOutlined,
   MessageOutlined,
   PlusOutlined,
+  RightOutlined,
   SendOutlined,
   StarOutlined,
   ThunderboltOutlined,
@@ -107,6 +108,58 @@ function formatSessionTime(value) {
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 }
 
+function normalizeReferenceData(referenceData) {
+  if (!Array.isArray(referenceData)) return [];
+  const seen = new Set();
+  return referenceData
+    .map((item) => {
+      const title = item?.title || '';
+      const link = item?.url || item?.link || '';
+      return {
+        title: String(title).trim(),
+        link: String(link).trim(),
+      };
+    })
+    .filter((item) => {
+      if (!item.title || !item.link || seen.has(item.link)) return false;
+      seen.add(item.link);
+      return true;
+    });
+}
+
+function ReferencePanel({ queryKey, referenceData }) {
+  const [expanded, setExpanded] = useState(false);
+  const references = normalizeReferenceData(referenceData);
+  const keywordText = String(queryKey || '').trim();
+  if (!keywordText && references.length === 0) return null;
+
+  return (
+    <div className={`referencePanel ${expanded ? 'isExpanded' : ''}`}>
+      <button type="button" className="referenceToggle" onClick={() => setExpanded((value) => !value)}>
+        <GlobalOutlined />
+        <span>搜索 {keywordText ? 1 : 0} 个关键词，参考 {references.length} 篇资料</span>
+        <RightOutlined className="referenceChevron" />
+      </button>
+      {expanded && (
+        <div className="referenceBody">
+          {keywordText && <Text className="referenceQuery">“{keywordText}”</Text>}
+          {references.length > 0 && (
+            <ol className="referenceList">
+              {references.slice(0, 18).map((reference, index) => (
+                <li key={`${reference.link}-${index}`}>
+                  <a href={reference.link} target="_blank" rel="noreferrer">
+                    {reference.title}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PulseGraph() {
   return (
     <div className="pulseGraph" aria-hidden="true">
@@ -132,6 +185,9 @@ function MessageBubble({ message, onCopy }) {
           {!isUser && message.completed === false && <Tag color="warning">未完成</Tag>}
         </Flex>
         <Card size="small" className="bubbleCard">
+          {!isUser && !message.error && (
+            <ReferencePanel queryKey={message.query_key} referenceData={message.reference_data} />
+          )}
           {isUser || message.error ? (
             <Paragraph className="messageText">{message.content}</Paragraph>
           ) : (
@@ -180,6 +236,8 @@ function TopicPulseApp() {
   const [topicsError, setTopicsError] = useState('');
   const [userId] = useState(getOrCreateUserId);
   const inputRef = useRef(null);
+  const sessionLoadTokenRef = useRef(0);
+  const creatingNewChatRef = useRef(false);
   const location = useLocation();
   const navigate = useNavigate();
   const activeView = location.pathname.startsWith('/topics') ? 'topics' : 'chat';
@@ -196,6 +254,8 @@ function TopicPulseApp() {
   }, [messages]);
 
   function createNewChat() {
+    sessionLoadTokenRef.current += 1;
+    creatingNewChatRef.current = true;
     navigate('/chat');
     setMessages([]);
     setInput('');
@@ -220,10 +280,15 @@ function TopicPulseApp() {
 
   async function loadSessionDetail(nextSessionId) {
     if (!nextSessionId || loading) return;
+    const loadToken = sessionLoadTokenRef.current + 1;
+    sessionLoadTokenRef.current = loadToken;
     setSessionsError('');
     try {
       const response = await fetch(`/api/sessions/${encodeURIComponent(nextSessionId)}`);
       const data = await readApiResponse(response, '会话加载失败');
+      if (loadToken !== sessionLoadTokenRef.current) {
+        return;
+      }
       setSessionId(data.id);
       setLastSteps([]);
       setInput('');
@@ -234,10 +299,23 @@ function TopicPulseApp() {
             role: message.role,
             content: message.content,
             completed: message.completed,
+            query_key: message.query_key,
+            reference_data: message.reference_data || [],
             at: message.created_at,
           })),
       );
     } catch (error) {
+      if (loadToken !== sessionLoadTokenRef.current) {
+        return;
+      }
+      if (error.status === 404 || error.message === 'Session not found') {
+        setSessionId(null);
+        setMessages([]);
+        setLastSteps([]);
+        setInput('');
+        navigate('/chat', { replace: true });
+        return;
+      }
       setSessionsError(error.message || '会话加载失败');
     }
   }
@@ -290,6 +368,15 @@ function TopicPulseApp() {
   }, []);
 
   useEffect(() => {
+    if (location.pathname === '/chat') {
+      creatingNewChatRef.current = false;
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (creatingNewChatRef.current) {
+      return;
+    }
     if (activeView !== 'chat' || !routedSessionId || routedSessionId === sessionId) {
       return;
     }
@@ -350,6 +437,8 @@ function TopicPulseApp() {
           role: 'assistant',
           content: data.answer || '已完成，但后端没有返回具体回答。',
           completed: data.completed,
+          query_key: data.query_key,
+          reference_data: data.reference_data || [],
           steps: data.steps || [],
           at: new Date().toISOString(),
         },
@@ -360,7 +449,7 @@ function TopicPulseApp() {
         ...nextMessages,
         {
           role: 'assistant',
-          content: `请求失败：${error.message || '请确认后端服务已经启动，并检查网络连接。'}`,
+          content: `请求失败：${error.message || '请确认后端服务已启动，并检查网络连接。'}`,
           completed: false,
           error: true,
           at: new Date().toISOString(),
@@ -414,7 +503,7 @@ function TopicPulseApp() {
               </Avatar>
               <div className="brandCopy">
                 <Text strong>Topic Pulse</Text>
-                <Text type="secondary">告别信息差~</Text>
+                <Text type="secondary">告别信息噪音</Text>
               </div>
             </Flex>
 
@@ -534,7 +623,7 @@ function TopicPulseApp() {
                     <Text className="heroEyebrow">Topic Pulse</Text>
                     <Title level={1}>把热点线索整理成可行动的判断。</Title>
                     <Paragraph>
-                      输入新闻、话题或跟踪目标，系统会结合记忆、检索和 ReAct 推理返回分析结果。
+                      输入新闻、话题或追踪目标，系统会结合记忆、检索和 ReAct 推理返回分析结果。
                     </Paragraph>
                   </Flex>
                   <div className="promptGrid">

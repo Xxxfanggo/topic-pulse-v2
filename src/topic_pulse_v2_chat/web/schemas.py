@@ -18,6 +18,8 @@ class ChatMessage(BaseModel):
 class SessionChatMessage(ChatMessage):
     created_at: str
     completed: bool | None = None
+    query_key: str | None = None
+    reference_data: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
@@ -32,6 +34,8 @@ class ChatResponse(BaseModel):
     session_id: str
     user_id: str
     completed: bool
+    query_key: str | None = None
+    reference_data: list[dict[str, str]] = Field(default_factory=list)
     steps: list[dict] = Field(default_factory=list)
 
 

@@ -8,7 +8,9 @@ export async function readApiResponse(response, fallbackMessage = '请求失败'
       typeof payload === 'object' && payload !== null
         ? payload.detail || payload.message || fallbackMessage
         : payload || fallbackMessage;
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
 
   return payload;

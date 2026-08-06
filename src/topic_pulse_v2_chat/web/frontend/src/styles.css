@@ -648,6 +648,110 @@ body {
   line-height: 1.72;
 }
 
+.referencePanel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  justify-items: start;
+}
+
+.referenceToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid #e3e7f2;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 84%);
+  color: #64748b;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 9px;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.referenceToggle:hover {
+  border-color: #c7d2fe;
+  background: #f8faff;
+  color: #4f46e5;
+  box-shadow: 0 8px 20px rgb(79 70 229 / 8%);
+}
+
+.referenceToggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.referenceToggle .anticon:first-child {
+  color: #2563eb;
+}
+
+.referenceChevron {
+  color: #94a3b8;
+  font-size: 10px;
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.referencePanel.isExpanded .referenceChevron {
+  color: #4f46e5;
+  transform: rotate(90deg);
+}
+
+.referenceBody {
+  display: grid;
+  gap: 8px;
+  /*width: min(620px, 100%);*/
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+  padding: 10px 12px;
+  animation: referenceIn 160ms ease-out;
+}
+
+.referenceQuery {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.referenceList {
+  display: grid;
+  gap: 6px;
+  /*max-height: 300px;*/
+  margin: 0;
+  overflow: auto;
+  padding-left: 20px;
+}
+
+.referenceList li {
+  color: #2563eb;
+  line-height: 1.55;
+  padding-left: 4px;
+}
+
+.referenceList a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.referenceList a:hover {
+  text-decoration: underline;
+}
+
+@keyframes referenceIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .messageMarkdown h1 {
   margin-bottom: 10px;
   font-size: 18px;

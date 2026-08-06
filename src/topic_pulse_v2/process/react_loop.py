@@ -91,8 +91,10 @@ class ReActConfig:
         
         "# 最终回答输出格式\n"
         "当你已经完成任务并准备回答用户时，只返回一个 JSON 对象，不要输出 Markdown、解释文字或额外文本：\n"
-        '{"thought": "简短说明已经完成", "final_answer": "{\\"summary\\":\\"给用户的结构化摘要\\",\\"items\\":[],\\"next_action\\":\\"可选的后续建议\\"}"}\n'
+        '{"thought": "简短说明已经完成", "final_answer": "{\\"summary\\":\\"给用户的结构化摘要\\",\\"items\\":[],\\"next_action\\":\\"可选的后续建议\\",\\"query_key\\":\\"查询关键词\\",\\"reference_data\\":[{\\"title\\":\\"参考资料标题\\",\\"url\\":\\"https://example.com\\"}]}"}\n'
         "final_answer 的值必须是一个合法 JSON 字符串；也就是说，外层是 ReAct JSON，内层 final_answer 是经过转义的 JSON 字符串。\n"
+        "final_answer 内层 JSON 的 summary 必须是面向用户的自然语言或 Markdown 正文，禁止把另一段 JSON、final_answer、items、reference_data 或 <think> 内容塞进 summary。\n"
+        "如果本次流程调用过 doubao_search，final_answer 内层 JSON 必须包含 query_key 和 reference_data。query_key 是实际搜索关键词；reference_data 是参考资料对象数组，每个对象必须只包含 title 和 url 两个英文 key，禁止使用中文 key。\n"
         "最终回答必须使用中文，并且必须是结构化数据。\n"
     )
 
@@ -319,6 +321,12 @@ class ReActAgent:
 
         if not completed:
             answer = "智能体已停止，因为达到了最大执行步数。"
+
+        answer = self._augment_answer_with_search_references(
+            answer,
+            query,
+            tool_observations.get("doubao_search"),
+        )
 
         if self._memory_store and self._config.save_final_answer_to_memory:
             self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
@@ -784,6 +792,112 @@ class ReActAgent:
             return merged
         merged["summary"] = merged.get("summary") or str(search_result)
         return merged
+
+    @classmethod
+    def _augment_answer_with_search_references(
+        cls,
+        answer: str,
+        fallback_query: str,
+        search_result: Any,
+    ) -> str:
+        if search_result is None:
+            return answer
+
+        payload = cls._answer_payload(answer)
+        if payload is None:
+            payload = {"summary": answer}
+
+        payload.setdefault("query_key", cls._query_key_from_search_result(search_result, fallback_query))
+        references = cls._reference_data_from_search_result(search_result)
+        if references:
+            existing = payload.get("reference_data")
+            if not cls._has_usable_reference_data(existing):
+                payload["reference_data"] = references
+
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    @classmethod
+    def _answer_payload(cls, answer: str) -> dict[str, Any] | None:
+        stripped = answer.strip()
+        if not stripped:
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            payload = cls._extract_json_object(stripped)
+        if not isinstance(payload, dict):
+            return None
+
+        final_answer = payload.get("final_answer")
+        if isinstance(final_answer, str):
+            return cls._answer_payload(final_answer)
+        summary = payload.get("summary")
+        if isinstance(summary, str):
+            nested_payload = cls._answer_payload(summary)
+            if nested_payload and nested_payload.get("summary"):
+                merged = dict(nested_payload)
+                for key in ("query_key", "reference_data"):
+                    if key not in merged and payload.get(key):
+                        merged[key] = payload[key]
+                return merged
+        return payload
+
+    @staticmethod
+    def _query_key_from_search_result(search_result: Any, fallback_query: str) -> str:
+        if isinstance(search_result, dict):
+            for key in ("query", "Query"):
+                value = search_result.get(key)
+                if value:
+                    return str(value)
+            queries = search_result.get("queries")
+            if isinstance(queries, list) and queries:
+                return "；".join(str(item) for item in queries if item)
+        return fallback_query
+
+    @classmethod
+    def _reference_data_from_search_result(cls, search_result: Any) -> list[dict[str, str]]:
+        references: list[dict[str, str]] = []
+        seen_urls: set[str] = set()
+        for item in cls._search_items_from_result(search_result):
+            if not isinstance(item, dict):
+                continue
+            raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+            title = (
+                item.get("title")
+                or item.get("Title")
+                or raw.get("Title")
+                or raw.get("title")
+            )
+            url = (
+                item.get("url")
+                or item.get("Url")
+                or raw.get("Url")
+                or raw.get("url")
+            )
+            if not title or not url:
+                continue
+            url_text = str(url)
+            if url_text in seen_urls:
+                continue
+            seen_urls.add(url_text)
+            references.append(
+                {
+                    "title": str(title),
+                    "url": url_text,
+                }
+            )
+        return references
+
+    @staticmethod
+    def _has_usable_reference_data(value: Any) -> bool:
+        if not isinstance(value, list):
+            return False
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            if item.get("title") and item.get("url"):
+                return True
+        return False
 
     @staticmethod
     def _extract_json_object(content: str) -> dict[str, Any] | None:
