@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from .types import LLMRequest, LLMResponse, Message
+from .types import LLMRequest, LLMResponse, LLMStreamEvent, Message
 
 
 class LLMProvider(ABC):
@@ -16,6 +16,18 @@ class LLMProvider(ABC):
     @abstractmethod
     def call(self, request: LLMRequest) -> LLMResponse:
         """Execute one model call."""
+
+    def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
+        """Execute one model call and yield stream events.
+
+        Providers that do not support native streaming inherit this compatible
+        fallback, so callers can adopt the stream API without losing rollback.
+        """
+
+        response = self.call(request)
+        if response.content:
+            yield LLMStreamEvent(type="delta", content=response.content)
+        yield LLMStreamEvent(type="done", response=response)
 
 
 @dataclass(slots=True)
@@ -92,3 +104,24 @@ class LLMClient:
             metadata=metadata or {},
         )
         return self.get_provider(provider).call(request)
+
+    def stream(
+        self,
+        messages: list[Message],
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Iterator[LLMStreamEvent]:
+        request = LLMRequest(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools or [],
+            metadata=metadata or {},
+        )
+        yield from self.get_provider(provider).stream(request)

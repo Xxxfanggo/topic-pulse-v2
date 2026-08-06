@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from typing import Any
 
 from .base import LLMProvider
-from .types import LLMRequest, LLMResponse, Message
+from .types import LLMRequest, LLMResponse, LLMStreamEvent, Message
 
 
 class MiniMaxLLMProvider(LLMProvider):
@@ -58,6 +59,53 @@ class MiniMaxLLMProvider(LLMProvider):
             or response_metadata.get("usage", {}),
             metadata={"response_metadata": response_metadata},
         )
+
+    def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
+        client = self._client or self._build_client(request)
+        messages = self._to_langchain_messages(request.messages)
+        if request.tools and hasattr(client, "bind_tools"):
+            client = client.bind_tools(request.tools)
+        if not hasattr(client, "stream"):
+            yield from super().stream(request)
+            return
+
+        full_message: Any | None = None
+        content_parts: list[str] = []
+        for chunk in client.stream(messages):
+            if full_message is None:
+                full_message = chunk
+            else:
+                try:
+                    full_message = full_message + chunk
+                except TypeError:
+                    full_message = chunk
+            content = getattr(chunk, "content", chunk)
+            if isinstance(content, list):
+                content = "".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in content)
+            content_text = str(content or "")
+            if content_text:
+                content_parts.append(content_text)
+                yield LLMStreamEvent(type="delta", content=content_text, metadata={"raw": chunk})
+
+        if full_message is None:
+            response = self.call(request)
+            yield LLMStreamEvent(type="done", response=response)
+            return
+
+        response_metadata = getattr(full_message, "response_metadata", {}) or {}
+        tool_calls = getattr(full_message, "tool_calls", []) or []
+        response = LLMResponse(
+            content=str(getattr(full_message, "content", "") or "".join(content_parts)),
+            model=request.model or self.model,
+            raw=full_message,
+            tool_calls=list(tool_calls or []),
+            usage=response_metadata.get("token_usage", {})
+            or response_metadata.get("usage", {})
+            or getattr(full_message, "usage_metadata", {})
+            or {},
+            metadata={"response_metadata": response_metadata},
+        )
+        yield LLMStreamEvent(type="done", response=response)
 
     def _build_client(self, request: LLMRequest) -> Any:
         try:

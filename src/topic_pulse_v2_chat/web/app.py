@@ -49,6 +49,13 @@ class ChatRuntime(Protocol):
         ...
 
 
+_STREAM_END = object()
+
+
+def _next_stream_event(iterator):
+    return next(iterator, _STREAM_END)
+
+
 def _topic_title(content: str, fallback: str) -> str:
     for line in content.splitlines():
         stripped = line.strip()
@@ -107,6 +114,56 @@ def _stream_event(event_type: str, **payload) -> str:
 def _text_chunks(content: str, size: int = 12):
     for index in range(0, len(content), size):
         yield content[index : index + size]
+
+
+def _partial_display_answer(content: str) -> str:
+    answer = _strip_think_blocks(content).strip()
+    if not answer:
+        return ""
+
+    final_answer = _partial_json_string_value(answer, "final_answer")
+    if final_answer:
+        nested = _partial_display_answer(final_answer)
+        return nested or final_answer
+
+    summary = _partial_json_string_value(answer, "summary")
+    if summary:
+        return _strip_think_blocks(summary).strip()
+
+    return ""
+
+
+def _partial_json_string_value(content: str, key: str) -> str | None:
+    key_match = re.search(rf'"{re.escape(key)}"\s*:\s*"', content)
+    if not key_match:
+        return None
+
+    start = key_match.end()
+    escaped = False
+    chars: list[str] = []
+    for char in content[start:]:
+        if escaped:
+            chars.append("\\" + char)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            break
+        chars.append(char)
+
+    raw = "".join(chars)
+    if not raw:
+        return ""
+    try:
+        return json.loads(f'"{raw}"')
+    except json.JSONDecodeError:
+        return (
+            raw.replace("\\n", "\n")
+            .replace('\\"', '"')
+            .replace("\\/", "/")
+        )
 
 
 def _display_answer(answer: str) -> str:
@@ -365,23 +422,69 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
     async def stream_chat(request: ChatRequest) -> StreamingResponse:
         async def event_generator():
             yield _stream_event("status", text="正在分析问题")
+            result = None
+            streamed_answer = ""
+            raw_step_content = ""
             try:
-                result = await run_in_threadpool(
-                    app.state.chat_runtime.chat,
-                    user_id=request.user_id,
-                    message=request.message,
-                    session_id=request.session_id,
-                    metadata={
-                        "source": "web_stream",
-                        "history_length": len(request.history),
-                    },
-                )
+                metadata = {
+                    "source": "web_stream",
+                    "history_length": len(request.history),
+                }
+                if hasattr(app.state.chat_runtime, "chat_stream"):
+                    iterator = app.state.chat_runtime.chat_stream(
+                        user_id=request.user_id,
+                        message=request.message,
+                        session_id=request.session_id,
+                        metadata=metadata,
+                    )
+                    while True:
+                        event = await run_in_threadpool(_next_stream_event, iterator)
+                        if event is _STREAM_END:
+                            break
+                        if event.type == "status":
+                            stage = event.data.get("stage")
+                            if stage == "llm_start":
+                                raw_step_content = ""
+                                yield _stream_event("status", text="正在分析问题")
+                            continue
+                        if event.type == "llm_delta":
+                            raw_step_content += event.content or ""
+                            visible_answer = _partial_display_answer(raw_step_content)
+                            if visible_answer.startswith(streamed_answer):
+                                delta = visible_answer[len(streamed_answer):]
+                                if delta:
+                                    streamed_answer = visible_answer
+                                    yield _stream_event("delta", content=delta)
+                            continue
+                        if event.type == "tool_start":
+                            yield _stream_event("status", text="正在检索和整理资料")
+                            continue
+                        if event.type == "tool_end":
+                            yield _stream_event("status", text="正在整合工具结果")
+                            continue
+                        if event.type == "result":
+                            result = event.result
+                            break
+                        if event.type == "error":
+                            yield _stream_event("error", message=event.content or "请求失败")
+                            return
+                else:
+                    result = await run_in_threadpool(
+                        app.state.chat_runtime.chat,
+                        user_id=request.user_id,
+                        message=request.message,
+                        session_id=request.session_id,
+                        metadata=metadata,
+                    )
             except Exception:
                 logger.exception("Streaming chat runtime failed.")
                 yield _stream_event(
                     "error",
                     message="模型服务暂时不可用，请确认 API_KEY、网络连接和模型服务配置后重试。",
                 )
+                return
+            if result is None:
+                yield _stream_event("error", message="请求失败：没有返回有效结果")
                 return
 
             answer = _display_answer(result.answer)
@@ -396,9 +499,11 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
                     reference_data=reference_data,
                 )
 
-            yield _stream_event("status", text="正在生成回答")
+            if not streamed_answer:
+                yield _stream_event("status", text="正在生成回答")
             if answer:
-                for chunk in _text_chunks(answer):
+                remaining_answer = answer[len(streamed_answer):] if answer.startswith(streamed_answer) else answer
+                for chunk in _text_chunks(remaining_answer):
                     yield _stream_event("delta", content=chunk)
                     await asyncio.sleep(0.01)
             else:

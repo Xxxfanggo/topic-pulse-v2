@@ -134,6 +134,86 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "done")
         self.assertEqual(events[-1]["session_id"], "session-stream")
 
+    def test_stream_chat_uses_runtime_stream_when_available(self):
+        class StreamingRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                raise AssertionError("chat fallback should not be used")
+
+            def chat_stream(self, *, user_id, message, session_id=None, metadata=None):
+                yield SimpleNamespace(type="status", data={"stage": "llm_start"})
+                yield SimpleNamespace(
+                    type="result",
+                    data={},
+                    result=SimpleNamespace(
+                        answer='{"summary":"Runtime stream answer.","items":[]}',
+                        session_id="session-runtime-stream",
+                        completed=True,
+                        steps=[],
+                    ),
+                )
+
+        client = TestClient(create_app(chat_runtime=StreamingRuntime()))
+        with client.stream(
+            "POST",
+            "/api/chat/stream",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        ) as response:
+            body = response.read().decode("utf-8")
+
+        events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        self.assertEqual(response.status_code, 200)
+        self.assertIn({"type": "delta", "content": "Runtime stre"}, events)
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["session_id"], "session-runtime-stream")
+
+    def test_stream_chat_extracts_visible_answer_from_llm_delta(self):
+        class StreamingRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                raise AssertionError("chat fallback should not be used")
+
+            def chat_stream(self, *, user_id, message, session_id=None, metadata=None):
+                yield SimpleNamespace(type="status", data={"stage": "llm_start"})
+                yield SimpleNamespace(
+                    type="llm_delta",
+                    content='{"thought":"done","final_answer":"{\\"summary\\":\\"Hel',
+                    data={},
+                )
+                yield SimpleNamespace(
+                    type="llm_delta",
+                    content='lo stream\\",\\"items\\":[]}"}',
+                    data={},
+                )
+                yield SimpleNamespace(
+                    type="result",
+                    data={},
+                    result=SimpleNamespace(
+                        answer='{"summary":"Hello stream","items":[]}',
+                        session_id="session-visible-stream",
+                        completed=True,
+                        steps=[],
+                    ),
+                )
+
+        client = TestClient(create_app(chat_runtime=StreamingRuntime()))
+        with client.stream(
+            "POST",
+            "/api/chat/stream",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        ) as response:
+            body = response.read().decode("utf-8")
+
+        events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        deltas = [event["content"] for event in events if event["type"] == "delta"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual("".join(deltas), "Hello stream")
+        self.assertFalse(any("final_answer" in delta for delta in deltas))
+
     def test_chat_returns_search_reference_metadata(self):
         class SearchReferenceRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):

@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from topic_pulse_v2.context_trim import (
@@ -125,6 +126,26 @@ class ReActResult:
     steps: list[ReActStep]
     completed: bool
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ReActStreamEvent:
+    """Event yielded by the streaming ReAct loop."""
+
+    type: Literal[
+        "status",
+        "llm_delta",
+        "tool_start",
+        "tool_end",
+        "step_end",
+        "result",
+        "error",
+    ]
+    content: str = ""
+    session_id: str | None = None
+    step_index: int | None = None
+    data: dict[str, Any] = field(default_factory=dict)
+    result: ReActResult | None = None
 
 
 class ReActAgent:
@@ -350,6 +371,298 @@ class ReActAgent:
             steps=steps,
             completed=completed,
             metadata={"max_steps": self._config.max_steps},
+        )
+
+    def stream(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        session_id: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Iterator[ReActStreamEvent]:
+        if not user_id:
+            raise ValueError("user_id cannot be empty.")
+        if not query:
+            raise ValueError("query cannot be empty.")
+
+        session_id = self._ensure_session(session_id, user_id)
+        yield ReActStreamEvent(type="status", session_id=session_id, data={"stage": "session_ready"})
+
+        if self._memory_store and self._config.save_user_input_to_memory:
+            self._memory_store.save(user_id, query, metadata={"type": "user_input"})
+
+        messages = self._build_initial_messages(user_id, query, session_id)
+        steps: list[ReActStep] = []
+        answer = ""
+        completed = False
+        tool_observations: dict[str, Any] = {}
+        tools = self._tool_registry.as_llm_tools()
+
+        for index in range(1, self._config.max_steps + 1):
+            yield ReActStreamEvent(
+                type="status",
+                session_id=session_id,
+                step_index=index,
+                data={"stage": "llm_start"},
+            )
+            context = self._context_trimmer.trim(
+                ContextTrimRequest(
+                    messages=messages,
+                    tools=tools,
+                    session_id=session_id,
+                    user_id=user_id,
+                    query=query,
+                    step_index=index,
+                    metadata=metadata or {},
+                )
+            )
+            llm_messages = context.messages
+            log_event(
+                self._config.trace_log_path,
+                "llm_request",
+                session_id=session_id,
+                step_index=index,
+                data={
+                    "provider": provider,
+                    "model": model,
+                    "messages": [self._message_to_dict(message) for message in llm_messages],
+                    "tools": tools,
+                    "context_trim": context.metadata,
+                    "metadata": metadata or {},
+                    "stream": True,
+                },
+            )
+
+            response = None
+            content_parts: list[str] = []
+            for event in self._llm_client.stream(
+                llm_messages,
+                provider=provider,
+                model=model,
+                tools=tools,
+                metadata=metadata,
+            ):
+                if event.type == "delta":
+                    content_parts.append(event.content)
+                    yield ReActStreamEvent(
+                        type="llm_delta",
+                        content=event.content,
+                        session_id=session_id,
+                        step_index=index,
+                        data=event.metadata,
+                    )
+                    continue
+                if event.type == "done":
+                    response = event.response
+                    continue
+                if event.type == "error":
+                    yield ReActStreamEvent(
+                        type="error",
+                        content=event.content,
+                        session_id=session_id,
+                        step_index=index,
+                        data=event.metadata,
+                    )
+
+            if response is None:
+                response = self._llm_client.call(
+                    llm_messages,
+                    provider=provider,
+                    model=model,
+                    tools=tools,
+                    metadata=metadata,
+                )
+            if not response.content and content_parts:
+                response.content = "".join(content_parts)
+
+            log_event(
+                self._config.trace_log_path,
+                "llm_response",
+                session_id=session_id,
+                step_index=index,
+                data={
+                    "content": response.content,
+                    "tool_calls": response.tool_calls,
+                    "usage": response.usage,
+                    "metadata": response.metadata,
+                    "model": response.model,
+                    "stream": True,
+                },
+            )
+            parsed = self._parse_response(response.content, response.tool_calls)
+            step_tool_calls = self._parsed_tool_calls(
+                parsed,
+                session_id,
+                index,
+                query,
+                tool_observations,
+            )
+            first_tool_call = step_tool_calls[0] if step_tool_calls else {}
+            step = ReActStep(
+                index=index,
+                thought=parsed.get("thought", ""),
+                action=first_tool_call.get("name"),
+                tool_call_id=first_tool_call.get("id"),
+                arguments=first_tool_call.get("args", {}),
+                tool_calls=step_tool_calls,
+                final_answer=parsed.get("final_answer"),
+                raw_response=response.content,
+            )
+            steps.append(step)
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=response.content,
+                    metadata={"tool_calls": self._assistant_tool_calls(step.tool_calls)},
+                )
+            )
+
+            if step.final_answer is not None:
+                answer = step.final_answer
+                completed = True
+                yield ReActStreamEvent(
+                    type="step_end",
+                    session_id=session_id,
+                    step_index=index,
+                    data={"completed": True, "thought": step.thought},
+                )
+                break
+
+            if step.tool_calls:
+                for tool_call in step.tool_calls:
+                    tool_request = ToolCallRequest(
+                        name=tool_call["name"],
+                        arguments=tool_call.get("args", {}),
+                        call_id=tool_call.get("id"),
+                    )
+                    yield ReActStreamEvent(
+                        type="tool_start",
+                        session_id=session_id,
+                        step_index=index,
+                        data={
+                            "name": tool_request.name,
+                            "arguments": tool_request.arguments,
+                            "call_id": tool_request.call_id,
+                        },
+                    )
+                    log_event(
+                        self._config.trace_log_path,
+                        "tool_request",
+                        session_id=session_id,
+                        step_index=index,
+                        data={
+                            "name": tool_request.name,
+                            "arguments": tool_request.arguments,
+                            "call_id": tool_request.call_id,
+                            "metadata": tool_request.metadata,
+                        },
+                    )
+                    tool_result = self._tool_executor.call_request(tool_request)
+                    log_event(
+                        self._config.trace_log_path,
+                        "tool_response",
+                        session_id=session_id,
+                        step_index=index,
+                        data={
+                            "name": tool_result.name,
+                            "success": tool_result.success,
+                            "result": tool_result.result,
+                            "error": tool_result.error,
+                            "call_id": tool_result.call_id,
+                            "elapsed_ms": tool_result.elapsed_ms,
+                            "metadata": tool_result.metadata,
+                        },
+                    )
+                    step.tool_results.append(tool_result)
+                    if step.tool_result is None:
+                        step.tool_result = tool_result
+                    if tool_result.success:
+                        self._remember_tool_observation(tool_observations, tool_result)
+                    messages.append(
+                        Message(
+                            role="tool",
+                            name=tool_result.name,
+                            tool_call_id=tool_result.call_id,
+                            content=self._format_observation(tool_result),
+                        )
+                    )
+                    yield ReActStreamEvent(
+                        type="tool_end",
+                        session_id=session_id,
+                        step_index=index,
+                        data={
+                            "name": tool_result.name,
+                            "success": tool_result.success,
+                            "result": tool_result.result,
+                            "error": tool_result.error,
+                            "call_id": tool_result.call_id,
+                            "elapsed_ms": tool_result.elapsed_ms,
+                        },
+                    )
+                step.observation = [
+                    result.result if result.success else result.error
+                    for result in step.tool_results
+                ]
+                if len(step.observation) == 1:
+                    step.observation = step.observation[0]
+                yield ReActStreamEvent(
+                    type="step_end",
+                    session_id=session_id,
+                    step_index=index,
+                    data={"completed": False, "thought": step.thought},
+                )
+                continue
+
+            answer = response.content
+            completed = True
+            yield ReActStreamEvent(
+                type="step_end",
+                session_id=session_id,
+                step_index=index,
+                data={"completed": True, "thought": step.thought},
+            )
+            break
+
+        if not completed:
+            answer = "智能体已停止，因为达到最大执行步数。"
+
+        answer = self._augment_answer_with_search_references(
+            answer,
+            query,
+            tool_observations.get("doubao_search"),
+        )
+        if self._memory_store and self._config.save_final_answer_to_memory:
+            self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
+        self._save_session_history(session_id, query, answer, completed)
+        self._finish_session(session_id, completed)
+        log_event(
+            self._config.trace_log_path,
+            "agent_finish",
+            session_id=session_id,
+            step_index=None,
+            data={
+                "answer": answer,
+                "completed": completed,
+                "max_steps": self._config.max_steps,
+                "stream": True,
+            },
+        )
+
+        result = ReActResult(
+            answer=answer,
+            session_id=session_id,
+            steps=steps,
+            completed=completed,
+            metadata={"max_steps": self._config.max_steps, "stream": True},
+        )
+        yield ReActStreamEvent(
+            type="result",
+            session_id=session_id,
+            data={"completed": completed},
+            result=result,
         )
 
     def _ensure_session(self, session_id: str | None, user_id: str) -> str | None:

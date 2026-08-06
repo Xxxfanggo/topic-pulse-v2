@@ -41,3 +41,13 @@ class LLMResponse:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class LLMStreamEvent:
+    """Provider-neutral event yielded while a model call is streaming."""
+
+    type: Literal["delta", "done", "error"]
+    content: str = ""
+    response: LLMResponse | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)

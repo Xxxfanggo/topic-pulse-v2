@@ -2,7 +2,7 @@
 
 from .base import LLMClient, LLMConfig, LLMProvider
 from .providers import MiniMaxLLMProvider
-from .types import LLMRequest, LLMResponse, Message, Role
+from .types import LLMRequest, LLMResponse, LLMStreamEvent, Message, Role
 
 __all__ = [
     "LLMClient",
@@ -10,6 +10,7 @@ __all__ = [
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",
+    "LLMStreamEvent",
     "Message",
     "MiniMaxLLMProvider",
     "Role",
