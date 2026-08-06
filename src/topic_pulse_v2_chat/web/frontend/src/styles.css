@@ -644,6 +644,34 @@ body {
   white-space: pre-wrap;
 }
 
+.messageStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  font-size: 13px;
+}
+
+.statusSpinner {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #dbeafe;
+  border-top-color: #4f46e5;
+  border-radius: 50%;
+  animation: statusSpin 850ms linear infinite;
+}
+
+.statusSpinner::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: #22d3ee;
+  opacity: .72;
+  animation: statusPulse 1.2s ease-in-out infinite;
+}
+
 .messageMarkdown {
   line-height: 1.72;
 }
@@ -914,6 +942,24 @@ body {
   50% {
     opacity: 1;
     transform: translateY(-3px);
+  }
+}
+
+@keyframes statusSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes statusPulse {
+  0%,
+  100% {
+    opacity: .45;
+    transform: scale(.72);
+  }
+  50% {
+    opacity: .9;
+    transform: scale(1);
   }
 }
 

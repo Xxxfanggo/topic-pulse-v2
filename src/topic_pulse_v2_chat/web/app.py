@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -97,6 +98,15 @@ def _model_data(model) -> dict:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _stream_event(event_type: str, **payload) -> str:
+    return json.dumps({"type": event_type, **payload}, ensure_ascii=False, default=str) + "\n"
+
+
+def _text_chunks(content: str, size: int = 12):
+    for index in range(0, len(content), size):
+        yield content[index : index + size]
 
 
 def _display_answer(answer: str) -> str:
@@ -349,6 +359,68 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
             query_key=_answer_query_key(result.answer),
             reference_data=_answer_reference_data(result.answer),
             steps=react_result_steps_to_dict(result),
+        )
+
+    @app.post("/api/chat/stream")
+    async def stream_chat(request: ChatRequest) -> StreamingResponse:
+        async def event_generator():
+            yield _stream_event("status", text="正在分析问题")
+            try:
+                result = await run_in_threadpool(
+                    app.state.chat_runtime.chat,
+                    user_id=request.user_id,
+                    message=request.message,
+                    session_id=request.session_id,
+                    metadata={
+                        "source": "web_stream",
+                        "history_length": len(request.history),
+                    },
+                )
+            except Exception:
+                logger.exception("Streaming chat runtime failed.")
+                yield _stream_event(
+                    "error",
+                    message="模型服务暂时不可用，请确认 API_KEY、网络连接和模型服务配置后重试。",
+                )
+                return
+
+            answer = _display_answer(result.answer)
+            query_key = _answer_query_key(result.answer)
+            reference_data = _answer_reference_data(result.answer)
+            steps = react_result_steps_to_dict(result)
+
+            if query_key or reference_data:
+                yield _stream_event(
+                    "references",
+                    query_key=query_key,
+                    reference_data=reference_data,
+                )
+
+            yield _stream_event("status", text="正在生成回答")
+            if answer:
+                for chunk in _text_chunks(answer):
+                    yield _stream_event("delta", content=chunk)
+                    await asyncio.sleep(0.01)
+            else:
+                yield _stream_event("delta", content="已完成，但后端没有返回具体回答。")
+
+            yield _stream_event(
+                "done",
+                session_id=result.session_id or "",
+                user_id=request.user_id,
+                completed=result.completed,
+                query_key=query_key,
+                reference_data=reference_data,
+                steps=steps,
+            )
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="application/x-ndjson",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     @app.get("/api/topics", response_model=TopicListResponse)

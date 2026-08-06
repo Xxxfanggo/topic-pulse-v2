@@ -1,4 +1,5 @@
 import importlib
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -104,6 +105,34 @@ class ChatWebAppTests(unittest.TestCase):
 
         self.assertEqual(chat.status_code, 200)
         self.assertEqual(chat.json()["answer"], "Hello, I can track topics for you.")
+
+    def test_stream_chat_returns_ndjson_events(self):
+        class StructuredRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                return SimpleNamespace(
+                    answer='{"summary":"Streaming answer.","items":[],"query_key":"stream query","reference_data":[{"title":"Ref","url":"https://example.com"}]}',
+                    session_id="session-stream",
+                    completed=True,
+                    steps=[],
+                )
+
+        client = TestClient(create_app(chat_runtime=StructuredRuntime()))
+        with client.stream(
+            "POST",
+            "/api/chat/stream",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        ) as response:
+            body = response.read().decode("utf-8")
+
+        events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(events[0]["type"], "status")
+        self.assertIn({"type": "delta", "content": "Streaming an"}, events)
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["session_id"], "session-stream")
 
     def test_chat_returns_search_reference_metadata(self):
         class SearchReferenceRuntime:

@@ -188,6 +188,12 @@ function MessageBubble({ message, onCopy }) {
           {!isUser && !message.error && (
             <ReferencePanel queryKey={message.query_key} referenceData={message.reference_data} />
           )}
+          {!isUser && message.status && !message.content && (
+            <Text type="secondary" className="messageStatus">
+              <span className="statusSpinner" aria-hidden="true" />
+              {message.status}
+            </Text>
+          )}
           {isUser || message.error ? (
             <Paragraph className="messageText">{message.content}</Paragraph>
           ) : (
@@ -236,6 +242,7 @@ function TopicPulseApp() {
   const [topicsError, setTopicsError] = useState('');
   const [userId] = useState(getOrCreateUserId);
   const inputRef = useRef(null);
+  const conversationPaneRef = useRef(null);
   const sessionLoadTokenRef = useRef(0);
   const creatingNewChatRef = useRef(false);
   const location = useLocation();
@@ -405,17 +412,50 @@ function TopicPulseApp() {
     await window.navigator.clipboard?.writeText(content);
   }
 
+  function scrollConversationToBottom(behavior = 'smooth') {
+    window.requestAnimationFrame(() => {
+      const pane = conversationPaneRef.current;
+      if (!pane) return;
+      pane.scrollTo({ top: pane.scrollHeight, behavior });
+    });
+  }
+
   async function sendMessage(text) {
     const message = text.trim();
     if (!message || loading) return;
 
-    const nextMessages = [...messages, { role: 'user', content: message, at: new Date().toISOString() }];
+    const assistantId = window.crypto?.randomUUID?.() || `assistant-${Date.now()}`;
+    const nextMessages = [
+      ...messages,
+      { role: 'user', content: message, at: new Date().toISOString() },
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        completed: false,
+        status: '正在连接',
+        query_key: null,
+        reference_data: [],
+        steps: [],
+        at: new Date().toISOString(),
+      },
+    ];
     setMessages(nextMessages);
     setInput('');
     setLoading(true);
+    scrollConversationToBottom();
+
+    const updateAssistantMessage = (updater) => {
+      setMessages((current) =>
+        current.map((item) => {
+          if (item.id !== assistantId) return item;
+          return { ...item, ...updater(item) };
+        }),
+      );
+    };
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -424,37 +464,78 @@ function TopicPulseApp() {
           session_id: sessionId,
         }),
       });
-      const data = await readApiResponse(response, '请求失败');
 
-      setSessionId(data.session_id);
-      if (data.session_id) {
-        navigate(`/chat/${encodeURIComponent(data.session_id)}`, { replace: true });
+      if (!response.ok || !response.body) {
+        const errorPayload = await readApiResponse(response, '请求失败');
+        throw new Error(errorPayload?.message || '请求失败');
       }
-      setLastSteps(data.steps || []);
-      setMessages([
-        ...nextMessages,
-        {
-          role: 'assistant',
-          content: data.answer || '已完成，但后端没有返回具体回答。',
-          completed: data.completed,
-          query_key: data.query_key,
-          reference_data: data.reference_data || [],
-          steps: data.steps || [],
-          at: new Date().toISOString(),
-        },
-      ]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+
+          if (event.type === 'status') {
+            updateAssistantMessage(() => ({ status: event.text || '' }));
+            scrollConversationToBottom();
+          }
+
+          if (event.type === 'references') {
+            updateAssistantMessage(() => ({
+              query_key: event.query_key,
+              reference_data: event.reference_data || [],
+            }));
+            scrollConversationToBottom();
+          }
+
+          if (event.type === 'delta') {
+            updateAssistantMessage((item) => ({
+              content: `${item.content || ''}${event.content || ''}`,
+              status: '',
+            }));
+            scrollConversationToBottom();
+          }
+
+          if (event.type === 'done') {
+            setSessionId(event.session_id);
+            if (event.session_id) {
+              navigate(`/chat/${encodeURIComponent(event.session_id)}`, { replace: true });
+            }
+            setLastSteps(event.steps || []);
+            updateAssistantMessage(() => ({
+              completed: event.completed,
+              query_key: event.query_key,
+              reference_data: event.reference_data || [],
+              steps: event.steps || [],
+              status: '',
+            }));
+            scrollConversationToBottom();
+          }
+
+          if (event.type === 'error') {
+            throw new Error(event.message || '请求失败');
+          }
+        }
+      }
       loadChatSessions();
     } catch (error) {
-      setMessages([
-        ...nextMessages,
-        {
-          role: 'assistant',
-          content: `请求失败：${error.message || '请确认后端服务已启动，并检查网络连接。'}`,
-          completed: false,
-          error: true,
-          at: new Date().toISOString(),
-        },
-      ]);
+      updateAssistantMessage(() => ({
+        content: `请求失败：${error.message || '请确认后端服务已启动，并检查网络连接。'}`,
+        completed: false,
+        error: true,
+        status: '',
+      }));
     } finally {
       setLoading(false);
     }
@@ -599,7 +680,7 @@ function TopicPulseApp() {
           </Header>
 
           <Layout className={`mainLayout ${activeView === 'topics' ? 'isTopicMode' : ''}`}>
-            <Content className="conversationPane">
+            <Content ref={conversationPaneRef} className="conversationPane">
               {activeView === 'topics' ? (
                 routedTopicId ? (
                   <TopicDetailPage
@@ -646,7 +727,7 @@ function TopicPulseApp() {
                   {messages.map((message, index) => (
                     <MessageBubble key={`${message.role}-${index}`} message={message} onCopy={copyMessage} />
                   ))}
-                  {loading && (
+                  {loading && !messages.some((message) => message.role === 'assistant' && message.completed === false) && (
                     <Flex className="chatMessage isAssistant" gap={12}>
                       <Avatar className="messageAvatar">TP</Avatar>
                       <div className="messageMain">
