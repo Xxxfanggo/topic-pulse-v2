@@ -70,7 +70,7 @@ class ReActConfig:
         "5. topic_markdown_store 的 timeline_items 必须是提炼后的具体条目，条目应尽量包含 date、title、summary、source、url；source 优先使用搜索结果中的 site_name，url 使用搜索结果中的 url。\n\n"
         
         "# 长期关注话题决策流程\n"
-        "1. 如果用户明确表达“帮我关注”“持续关注”“长期跟踪”“记录下来”“保存到本地”“维护时间线”等意图，必须进入 Markdown 话题记忆流程。\n"
+        "1. 如果用户明确表达“帮我关注”“持续关注”“长期跟踪”“记录下来”“保存到本地”“维护时间线”等意图，必须进入 Markdown 话题记忆写入流程。\n"
         "2. 系统消息中的“本地已关注话题候选”是强约束：只要候选 topics 非空且与用户本次问题相关，即使用户没有再次说“持续关注”，也必须按已关注话题处理。\n"
         "3. 如果用户没有明确长期关注意图，但输入中包含“上次”“之前”“关注过”“那个话题”“怎么样了”“更新一下”“走势”“最近”“最新”等表达，必须调用 topic_markdown_read_summary 判断是否存在本地相关话题。\n"
         "4. 如果 topic_markdown_read_summary 返回相关候选，或系统消息中的“本地已关注话题候选”已经给出相关候选，必须调用 topic_markdown_read_detail 读取完整 Markdown 内容，再结合 doubao_search 的最新结果进行更新。\n"
