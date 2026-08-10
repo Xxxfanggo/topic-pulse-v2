@@ -26,7 +26,7 @@ class ReactChatService:
         self._memory = InMemoryStore()
         self._session_manager = SessionManager()
         self._tool_registry = ToolRegistry()
-        self._config = ReActConfig(max_steps=5)
+        self._config = ReActConfig(max_steps=20)
         self._agent = ReActAgent(
             llm_client=self._llm_client,
             tool_registry=self._tool_registry,
