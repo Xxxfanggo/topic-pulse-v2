@@ -220,7 +220,7 @@ function TopicUpdatePanel({ update }) {
             <div className="topicUpdateGroup">
               <Text strong>已记录信息</Text>
               <div className="topicUpdateList compact">
-                {existingItems.slice(0, 4).map((item, index) => (
+                {existingItems.map((item, index) => (
                   <div className="topicUpdateItem" key={`${item.url || item.title}-${index}`}>
                     <Tag>已记录</Tag>
                     <div className="topicUpdateCopy">
