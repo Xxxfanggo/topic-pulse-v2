@@ -97,7 +97,9 @@ class ReActConfig:
         "final_answer 的值必须是一个合法 JSON 字符串；也就是说，外层是 ReAct JSON，内层 final_answer 是经过转义的 JSON 字符串。\n"
         "final_answer 内层 JSON 的 summary 必须是面向用户的自然语言或 Markdown 正文，禁止把另一段 JSON、final_answer、items、reference_data 或 <think> 内容塞进 summary。\n"
         "如果本次流程调用过 doubao_search，final_answer 内层 JSON 必须包含 query_key 和 reference_data。query_key 是实际搜索关键词；reference_data 是参考资料对象数组，每个对象必须只包含 title 和 url 两个英文 key，禁止使用中文 key。\n"
-        "如果本次流程调用过 topic_markdown_store，final_answer 内层 JSON 必须包含 topic_update，用于标识本次话题记忆更新的新旧信息；topic_update 必须包含 topic_name、status、new_count、existing_count、new_items、existing_items。\n"
+        "如果本次流程调用过 topic_markdown_store，final_answer 内层 JSON 必须包含 topic_update，用于标识本次话题记忆写入结果；topic_update 必须包含 topic_name、status、new_count、existing_count、new_items、existing_items。\n"
+        "如果本次是首次创建话题（status=created 或 operation=create），写入的条目属于初始记录，不属于“本次新增信息”；topic_update 中应使用 initial_count 和 initial_items 表示初始记录，new_count 必须为 0，new_items 必须为空，summary 中禁止使用 <mark> 标签。\n"
+        "只有在更新已有话题且 status=updated_with_new_items 时，summary Markdown 中凡是直接根据 topic_update.new_items 新增信息得出的结论、关键句或段落，才必须使用 <mark>...</mark> 包裹，用于前端高亮展示；只允许使用 <mark> 标签，不要输出其他 HTML 标签。\n"
         "最终回答必须使用中文，并且必须是结构化数据。\n"
     )
 
@@ -1231,14 +1233,31 @@ class ReActAgent:
             existing_items = []
         new_count = int(store_result.get("new_count") or store_result.get("appended_count") or 0)
         existing_count = int(store_result.get("existing_count") or 0)
+        operation = str(store_result.get("operation") or "").strip()
+        status = str(store_result.get("update_status") or "").strip()
+        is_created = bool(store_result.get("created")) or operation == "create" or status == "created"
+        compact_new_items = ReActAgent._compact_topic_items(new_items if isinstance(new_items, list) else [])
+        compact_existing_items = ReActAgent._compact_topic_items(existing_items)
+        if is_created:
+            return {
+                "topic_name": topic_name,
+                "operation": operation or "create",
+                "status": "created",
+                "new_count": 0,
+                "existing_count": 0,
+                "new_items": [],
+                "existing_items": [],
+                "initial_count": new_count,
+                "initial_items": compact_new_items,
+            }
         return {
             "topic_name": topic_name,
-            "operation": store_result.get("operation") or "",
-            "status": store_result.get("update_status") or ("updated_with_new_items" if new_count else "no_new_items"),
+            "operation": operation,
+            "status": status or ("updated_with_new_items" if new_count else "no_new_items"),
             "new_count": new_count,
             "existing_count": existing_count,
-            "new_items": ReActAgent._compact_topic_items(new_items if isinstance(new_items, list) else []),
-            "existing_items": ReActAgent._compact_topic_items(existing_items),
+            "new_items": compact_new_items,
+            "existing_items": compact_existing_items,
         }
 
     @staticmethod

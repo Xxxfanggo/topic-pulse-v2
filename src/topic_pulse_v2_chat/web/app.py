@@ -219,6 +219,18 @@ def _display_answer(answer: str) -> str:
     return answer
 
 
+def _strip_mark_tags(content: str) -> str:
+    return re.sub(r"</?mark>", "", content, flags=re.IGNORECASE)
+
+
+def _display_answer_for_topic_update(answer: str, topic_update: dict) -> str:
+    display_answer = _display_answer(answer)
+    is_created = topic_update.get("status") == "created" or topic_update.get("operation") == "create"
+    if is_created:
+        return _strip_mark_tags(display_answer)
+    return display_answer
+
+
 def _answer_payload(answer: str) -> dict | None:
     answer = _strip_think_blocks(answer).strip()
     extracted_answer = _extract_json_string_value(answer, "final_answer")
@@ -297,6 +309,19 @@ def _answer_topic_update(answer: str) -> dict:
             return []
         normalized = []
         for item in value:
+            if isinstance(item, str):
+                title = item.strip()
+                if title:
+                    normalized.append(
+                        {
+                            "date": "",
+                            "title": title,
+                            "source": "",
+                            "url": "",
+                            "summary": "",
+                        }
+                    )
+                continue
             if not isinstance(item, dict):
                 continue
             title = str(item.get("title") or item.get("标题") or "").strip()
@@ -313,13 +338,33 @@ def _answer_topic_update(answer: str) -> dict:
             )
         return normalized
 
+    status = str(update.get("status") or "").strip()
+    operation = str(update.get("operation") or "").strip()
+    raw_new_items = normalize_items(update.get("new_items"))
+    raw_initial_items = normalize_items(update.get("initial_items"))
+    is_created = status == "created" or operation == "create"
+    if is_created:
+        initial_items = raw_initial_items or raw_new_items
+        initial_count = int(update.get("initial_count") or update.get("new_count") or len(initial_items) or 0)
+        return {
+            "topic_name": str(update.get("topic_name") or update.get("话题") or "").strip(),
+            "operation": operation or "create",
+            "status": "created",
+            "new_count": 0,
+            "existing_count": 0,
+            "new_items": [],
+            "existing_items": [],
+            "initial_count": initial_count,
+            "initial_items": initial_items,
+        }
+
     return {
         "topic_name": str(update.get("topic_name") or update.get("话题") or "").strip(),
-        "operation": str(update.get("operation") or "").strip(),
-        "status": str(update.get("status") or "").strip(),
+        "operation": operation,
+        "status": status,
         "new_count": int(update.get("new_count") or 0),
         "existing_count": int(update.get("existing_count") or 0),
-        "new_items": normalize_items(update.get("new_items")),
+        "new_items": raw_new_items,
         "existing_items": normalize_items(update.get("existing_items")),
     }
 
@@ -415,7 +460,12 @@ def _session_preview(messages: list[SessionMessage]) -> str:
 def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage]:
     formatted = []
     for message in messages:
-        content = _display_answer(message.content) if message.role == "assistant" else message.content
+        topic_update = _answer_topic_update(message.content) if message.role == "assistant" else {}
+        content = (
+            _display_answer_for_topic_update(message.content, topic_update)
+            if message.role == "assistant"
+            else message.content
+        )
         formatted.append(
             SessionChatMessage(
                 role=message.role,
@@ -424,7 +474,7 @@ def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage
                 completed=message.metadata.get("completed"),
                 query_key=_answer_query_key(message.content) if message.role == "assistant" else None,
                 reference_data=_answer_reference_data(message.content) if message.role == "assistant" else [],
-                topic_update=_answer_topic_update(message.content) if message.role == "assistant" else {},
+                topic_update=topic_update,
             )
         )
     return formatted
@@ -480,14 +530,15 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
                 status_code=503,
                 detail="模型服务暂时不可用，请确认 API_KEY、网络连接和模型服务配置后重试。",
             ) from exc
+        topic_update = _answer_topic_update(result.answer)
         return ChatResponse(
-            answer=_display_answer(result.answer),
+            answer=_display_answer_for_topic_update(result.answer, topic_update),
             session_id=result.session_id or "",
             user_id=request.user_id,
             completed=result.completed,
             query_key=_answer_query_key(result.answer),
             reference_data=_answer_reference_data(result.answer),
-            topic_update=_answer_topic_update(result.answer),
+            topic_update=topic_update,
             steps=react_result_steps_to_dict(result),
         )
 
@@ -592,10 +643,10 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
                 yield _stream_event("error", message="请求失败：没有返回有效结果")
                 return
 
-            answer = _display_answer(result.answer)
             query_key = _answer_query_key(result.answer)
             reference_data = _answer_reference_data(result.answer)
             topic_update = _answer_topic_update(result.answer)
+            answer = _display_answer_for_topic_update(result.answer, topic_update)
             steps = react_result_steps_to_dict(result)
 
             if query_key or reference_data:

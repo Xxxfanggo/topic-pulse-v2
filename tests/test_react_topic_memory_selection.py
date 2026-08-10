@@ -28,12 +28,15 @@ class ReActTopicMemorySelectionTests(unittest.TestCase):
 
         self.assertIn("# 长期关注话题决策流程", prompt)
         self.assertIn("如果用户明确表达“帮我关注”“持续关注”“长期跟踪”", prompt)
-        self.assertIn("必须先调用 topic_markdown_read_summary", prompt)
+        self.assertIn("调用 topic_markdown_read_summary 判断", prompt)
         self.assertIn("禁止调用 topic_markdown_store", prompt)
         self.assertIn("# 关键工具参数要求", prompt)
         self.assertIn("doubao_search 时，arguments 必须包含 query", prompt)
         self.assertIn("title 和 url 两个英文 key", prompt)
         self.assertIn("禁止使用中文 key", prompt)
+        self.assertIn("topic_update.new_items", prompt)
+        self.assertIn("<mark>...</mark>", prompt)
+        self.assertIn("不要输出其他 HTML 标签", prompt)
 
 
 if __name__ == "__main__":

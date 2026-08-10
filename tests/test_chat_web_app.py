@@ -333,6 +333,48 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual(chat.json()["topic_update"]["new_count"], 1)
         self.assertEqual(chat.json()["topic_update"]["new_items"][0]["title"], "DDR5 价格继续上涨")
 
+    def test_chat_normalizes_created_topic_update_as_initial_items(self):
+        class CreatedTopicRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                return SimpleNamespace(
+                    answer=json.dumps(
+                        {
+                            "summary": "<mark>已创建关注话题</mark>",
+                            "items": [],
+                            "topic_update": {
+                                "topic_name": "韩红最新动态",
+                                "status": "created",
+                                "new_count": 2,
+                                "existing_count": 0,
+                                "new_items": ["韩红亮相央视晚会", "韩红演唱会武汉站取消"],
+                                "existing_items": [],
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                    session_id="session-topic-created",
+                    completed=True,
+                    steps=[],
+                )
+
+        client = TestClient(create_app(chat_runtime=CreatedTopicRuntime()))
+        chat = client.post(
+            "/api/chat",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "持续关注韩红最新动态",
+            },
+        )
+
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["answer"], "已创建关注话题")
+        topic_update = chat.json()["topic_update"]
+        self.assertEqual(topic_update["status"], "created")
+        self.assertEqual(topic_update["new_count"], 0)
+        self.assertEqual(topic_update["new_items"], [])
+        self.assertEqual(topic_update["initial_count"], 2)
+        self.assertEqual(topic_update["initial_items"][0]["title"], "韩红亮相央视晚会")
+
     def test_chat_formats_think_prefixed_structured_answer_summary_only(self):
         class ThinkStructuredRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):

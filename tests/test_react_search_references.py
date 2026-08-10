@@ -77,5 +77,45 @@ class ReActSearchReferenceTests(unittest.TestCase):
         self.assertEqual(payload["topic_update"]["existing_items"][0]["title"], "此前已经记录的价格上涨")
 
 
+    def test_augment_answer_with_created_topic_update_uses_initial_items(self):
+        answer = json.dumps({"summary": "已创建关注话题", "items": []}, ensure_ascii=False)
+        store_result = {
+            "topic_name": "韩红最新动态",
+            "operation": "create",
+            "update_status": "created",
+            "created": True,
+            "new_count": 2,
+            "existing_count": 0,
+            "new_items": [
+                {
+                    "date": "2026-08-10",
+                    "title": "韩红亮相央视晚会",
+                    "source": "微博",
+                    "url": "https://example.com/hh-1",
+                    "summary": "韩红亮相央视晚会。",
+                },
+                {
+                    "date": "2026-07-12",
+                    "title": "韩红演唱会武汉站取消",
+                    "source": "凤凰网",
+                    "url": "https://example.com/hh-2",
+                    "summary": "武汉站因天气取消。",
+                },
+            ],
+            "existing_items": [],
+        }
+
+        augmented = ReActAgent._augment_answer_with_topic_update(answer, store_result)
+
+        payload = json.loads(augmented)
+        topic_update = payload["topic_update"]
+        self.assertEqual(topic_update["status"], "created")
+        self.assertEqual(topic_update["operation"], "create")
+        self.assertEqual(topic_update["new_count"], 0)
+        self.assertEqual(topic_update["new_items"], [])
+        self.assertEqual(topic_update["initial_count"], 2)
+        self.assertEqual(topic_update["initial_items"][0]["title"], "韩红亮相央视晚会")
+
+
 if __name__ == "__main__":
     unittest.main()
