@@ -174,7 +174,7 @@ function normalizeTopicItems(items) {
 }
 
 function TopicUpdatePanel({ update }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   if (!update || !update.topic_name) return null;
 
   const newItems = normalizeTopicItems(update.new_items);
