@@ -253,6 +253,16 @@ function PulseGraph() {
   );
 }
 
+function mergeAgentStep(steps = [], step = {}) {
+  const key = `${step.step_index || steps.length + 1}-${step.title || step.tool_name || ''}`;
+  const nextStep = { ...step, key };
+  const index = steps.findIndex((item) => item.key === key);
+  if (index === -1) {
+    return [...steps, nextStep];
+  }
+  return steps.map((item, itemIndex) => (itemIndex === index ? { ...item, ...nextStep } : item));
+}
+
 function MessageBubble({ message, onCopy }) {
   const isUser = message.role === 'user';
 
@@ -287,11 +297,14 @@ function MessageBubble({ message, onCopy }) {
               <Divider className="compactDivider" />
               <div className="stepList">
                 {message.steps.slice(0, 5).map((step, index) => (
-                  <div className="stepItem" key={`${index}-${step.action || step.tool_name || 'step'}`}>
-                    <Text type="secondary">Step {index + 1}</Text>
-                    <Text code ellipsis>
-                      {step.action || step.tool_name || step.final_answer || 'reasoning'}
-                    </Text>
+                  <div className={`stepItem ${step.status ? `is-${step.status}` : ''}`} key={step.key || `${index}-${step.action || step.tool_name || 'step'}`}>
+                    <span className="stepDot" />
+                    <div className="stepCopy">
+                      <Text strong>{step.title || `Step ${index + 1}`}</Text>
+                      <Text type="secondary">
+                        {step.detail || step.thought || step.action || step.tool_name || step.final_answer || '正在整理推理步骤'}
+                      </Text>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -601,6 +614,13 @@ function TopicPulseApp() {
             scrollConversationToBottom();
           }
 
+          if (event.type === 'agent_step') {
+            updateAssistantMessage((item) => ({
+              steps: mergeAgentStep(item.steps || [], event),
+            }));
+            scrollConversationToBottom();
+          }
+
           if (event.type === 'delta') {
             updateAssistantMessage((item) => ({
               content: `${item.content || ''}${event.content || ''}`,
@@ -615,12 +635,12 @@ function TopicPulseApp() {
               navigate(`/chat/${encodeURIComponent(event.session_id)}`, { replace: true });
             }
             setLastSteps(event.steps || []);
-            updateAssistantMessage(() => ({
+            updateAssistantMessage((item) => ({
               completed: event.completed,
               query_key: event.query_key,
               reference_data: event.reference_data || [],
               topic_update: event.topic_update || {},
-              steps: event.steps || [],
+              steps: item.steps?.length ? item.steps : event.steps || [],
               status: '',
             }));
             scrollConversationToBottom();

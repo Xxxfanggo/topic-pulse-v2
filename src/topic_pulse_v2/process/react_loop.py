@@ -552,6 +552,7 @@ class ReActAgent:
                             "name": tool_request.name,
                             "arguments": tool_request.arguments,
                             "call_id": tool_request.call_id,
+                            "thought": step.thought,
                         },
                     )
                     log_event(
@@ -606,6 +607,7 @@ class ReActAgent:
                             "error": tool_result.error,
                             "call_id": tool_result.call_id,
                             "elapsed_ms": tool_result.elapsed_ms,
+                            "thought": step.thought,
                         },
                     )
                 step.observation = [
@@ -1381,12 +1383,123 @@ class ReActAgent:
                     start = None
         return candidates
 
+    @classmethod
+    def _compact_observation_result(cls, tool_name: str, result: Any) -> Any:
+        if tool_name == "doubao_search":
+            return cls._compact_search_observation(result)
+        if tool_name == "topic_markdown_store":
+            return cls._compact_store_observation(result)
+        return cls._compact_json_value(result)
+
+    @classmethod
+    def _compact_search_observation(cls, result: Any) -> Any:
+        items = cls._search_items_from_result(result)
+        compact_items = [
+            cls._compact_search_item(item)
+            for item in items[:10]
+            if isinstance(item, dict)
+        ]
+        compact_items = [item for item in compact_items if item.get("title") or item.get("url")]
+
+        payload: dict[str, Any] = {
+            "query": cls._query_key_from_search_result(result, ""),
+            "result_count": len(items),
+            "web_results": compact_items,
+        }
+        if isinstance(result, dict):
+            for key in ("search_type", "request_id"):
+                if result.get(key):
+                    payload[key] = result[key]
+        return payload
+
+    @classmethod
+    def _compact_search_item(cls, item: dict[str, Any]) -> dict[str, str]:
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        summary = (
+            item.get("summary")
+            or item.get("snippet")
+            or item.get("Summary")
+            or item.get("Snippet")
+            or raw.get("Summary")
+            or raw.get("Snippet")
+            or ""
+        )
+        return {
+            "title": str(item.get("title") or item.get("Title") or raw.get("Title") or "").strip(),
+            "site_name": str(
+                item.get("site_name")
+                or item.get("site")
+                or item.get("source")
+                or item.get("SiteName")
+                or raw.get("SiteName")
+                or ""
+            ).strip(),
+            "url": str(item.get("url") or item.get("Url") or raw.get("Url") or "").strip(),
+            "publish_time": str(
+                item.get("publish_time")
+                or item.get("PublishTime")
+                or raw.get("PublishTime")
+                or ""
+            ).strip(),
+            "summary": cls._truncate_text(summary, 700),
+        }
+
+    @classmethod
+    def _compact_store_observation(cls, result: Any) -> Any:
+        if not isinstance(result, dict):
+            return cls._compact_json_value(result)
+        payload: dict[str, Any] = {}
+        for key in (
+            "topic_name",
+            "operation",
+            "path",
+            "created",
+            "updated",
+            "update_status",
+            "new_count",
+            "existing_count",
+            "appended_count",
+        ):
+            if key in result:
+                payload[key] = result[key]
+        new_items = result.get("new_items")
+        if isinstance(new_items, list):
+            payload["new_items"] = cls._compact_topic_items(new_items, limit=6)
+        existing_items = result.get("existing_items")
+        if isinstance(existing_items, list):
+            payload["existing_items"] = cls._compact_topic_items(existing_items, limit=4)
+        return payload
+
+    @classmethod
+    def _compact_json_value(cls, value: Any, *, depth: int = 0) -> Any:
+        if depth >= 4:
+            return cls._truncate_text(value, 300)
+        if isinstance(value, dict):
+            skipped_keys = {"raw", "content", "logo_url", "LogoUrl", "doubao_search_result"}
+            return {
+                str(key): cls._compact_json_value(item, depth=depth + 1)
+                for key, item in value.items()
+                if key not in skipped_keys
+            }
+        if isinstance(value, list):
+            return [cls._compact_json_value(item, depth=depth + 1) for item in value[:20]]
+        if isinstance(value, str):
+            return cls._truncate_text(value, 1000)
+        return value
+
+    @staticmethod
+    def _truncate_text(value: Any, limit: int) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}..."
+
     @staticmethod
     def _format_observation(tool_result: ToolCallResult) -> str:
         payload = {
             "tool": tool_result.name,
             "success": tool_result.success,
-            "result": tool_result.result,
+            "result": ReActAgent._compact_observation_result(tool_result.name, tool_result.result),
             "error": tool_result.error,
         }
         return f"观察结果：{json.dumps(payload, ensure_ascii=False, default=str)}"

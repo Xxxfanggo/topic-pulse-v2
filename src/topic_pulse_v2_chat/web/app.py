@@ -111,6 +111,37 @@ def _stream_event(event_type: str, **payload) -> str:
     return json.dumps({"type": event_type, **payload}, ensure_ascii=False, default=str) + "\n"
 
 
+def _public_reasoning_text(value: object, limit: int = 96) -> str:
+    text = _strip_think_blocks(str(value or "")).strip()
+    text = re.sub(r"\s+", " ", text)
+    if not text or text in {"{}", "null", "None"}:
+        return ""
+    if len(text) > limit:
+        return f"{text[:limit].rstrip()}..."
+    return text
+
+
+def _tool_display_name(name: object) -> str:
+    mapping = {
+        "doubao_search": "联网检索",
+        "topic_markdown_read_summary": "读取话题摘要",
+        "topic_markdown_read_detail": "读取话题详情",
+        "topic_markdown_store": "更新话题记忆",
+    }
+    text = str(name or "").strip()
+    return mapping.get(text, text or "工具调用")
+
+
+def _tool_argument_hint(arguments: object) -> str:
+    if not isinstance(arguments, dict):
+        return ""
+    for key in ("query", "topic_name", "path"):
+        value = arguments.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
 def _text_chunks(content: str, size: int = 12):
     for index in range(0, len(content), size):
         yield content[index : index + size]
@@ -499,10 +530,42 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
                                     yield _stream_event("delta", content=delta)
                             continue
                         if event.type == "tool_start":
-                            yield _stream_event("status", text="正在检索和整理资料")
+                            tool_name = _tool_display_name(event.data.get("name"))
+                            hint = _tool_argument_hint(event.data.get("arguments"))
+                            reason = _public_reasoning_text(event.data.get("thought"))
+                            yield _stream_event("status", text=f"正在{tool_name}")
+                            yield _stream_event(
+                                "agent_step",
+                                step_index=event.step_index,
+                                status="running",
+                                title=f"正在{tool_name}",
+                                detail=reason or (f"围绕「{hint}」获取支撑信息" if hint else "为回答补充必要信息"),
+                                tool_name=event.data.get("name"),
+                            )
                             continue
                         if event.type == "tool_end":
+                            tool_name = _tool_display_name(event.data.get("name"))
+                            success = bool(event.data.get("success"))
                             yield _stream_event("status", text="正在整合工具结果")
+                            yield _stream_event(
+                                "agent_step",
+                                step_index=event.step_index,
+                                status="done" if success else "error",
+                                title=f"{tool_name}{'完成' if success else '失败'}",
+                                detail="已拿到可用于生成回答的资料，正在归纳整理。" if success else str(event.data.get("error") or "工具执行失败"),
+                                tool_name=event.data.get("name"),
+                            )
+                            continue
+                        if event.type == "step_end":
+                            reason = _public_reasoning_text(event.data.get("thought"))
+                            if reason:
+                                yield _stream_event(
+                                    "agent_step",
+                                    step_index=event.step_index,
+                                    status="done" if event.data.get("completed") else "thinking",
+                                    title="完成一轮判断" if event.data.get("completed") else "继续推理下一步",
+                                    detail=reason,
+                                )
                             continue
                         if event.type == "result":
                             result = event.result

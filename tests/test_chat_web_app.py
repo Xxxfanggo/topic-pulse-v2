@@ -214,6 +214,59 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual("".join(deltas), "Hello stream")
         self.assertFalse(any("final_answer" in delta for delta in deltas))
 
+    def test_stream_chat_emits_public_agent_steps(self):
+        class StreamingRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                raise AssertionError("chat fallback should not be used")
+
+            def chat_stream(self, *, user_id, message, session_id=None, metadata=None):
+                yield SimpleNamespace(type="status", data={"stage": "llm_start"})
+                yield SimpleNamespace(
+                    type="tool_start",
+                    step_index=1,
+                    data={
+                        "name": "doubao_search",
+                        "arguments": {"query": "latest AI news"},
+                        "thought": "需要先检索最新资料，再组织回答。",
+                    },
+                )
+                yield SimpleNamespace(
+                    type="tool_end",
+                    step_index=1,
+                    data={"name": "doubao_search", "success": True},
+                )
+                yield SimpleNamespace(
+                    type="step_end",
+                    step_index=1,
+                    data={"completed": False, "thought": "资料已返回，需要继续归纳。"},
+                )
+                yield SimpleNamespace(
+                    type="result",
+                    data={},
+                    result=SimpleNamespace(
+                        answer='{"summary":"Done.","items":[]}',
+                        session_id="session-agent-step",
+                        completed=True,
+                        steps=[],
+                    ),
+                )
+
+        client = TestClient(create_app(chat_runtime=StreamingRuntime()))
+        with client.stream(
+            "POST",
+            "/api/chat/stream",
+            json={"user_id": "anonymous-user-1", "message": "hello"},
+        ) as response:
+            body = response.read().decode("utf-8")
+
+        events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        step_events = [event for event in events if event["type"] == "agent_step"]
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(step_events), 3)
+        self.assertEqual(step_events[0]["title"], "正在联网检索")
+        self.assertIn("检索最新资料", step_events[0]["detail"])
+        self.assertFalse(any("<think>" in event["detail"] for event in step_events))
+
     def test_chat_returns_search_reference_metadata(self):
         class SearchReferenceRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):
