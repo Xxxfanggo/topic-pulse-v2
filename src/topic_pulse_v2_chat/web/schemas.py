@@ -20,6 +20,7 @@ class SessionChatMessage(ChatMessage):
     completed: bool | None = None
     query_key: str | None = None
     reference_data: list[dict[str, str]] = Field(default_factory=list)
+    topic_update: dict = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
@@ -36,6 +37,7 @@ class ChatResponse(BaseModel):
     completed: bool
     query_key: str | None = None
     reference_data: list[dict[str, str]] = Field(default_factory=list)
+    topic_update: dict = Field(default_factory=dict)
     steps: list[dict] = Field(default_factory=list)
 
 

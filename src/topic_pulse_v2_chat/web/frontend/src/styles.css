@@ -758,6 +758,117 @@ body {
   justify-items: start;
 }
 
+.topicUpdatePanel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  justify-items: start;
+}
+
+.topicUpdateToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f0fdf4, #ffffff);
+  color: #166534;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 9px;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.topicUpdatePanel.noNew .topicUpdateToggle {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.topicUpdateToggle:hover {
+  border-color: #86efac;
+  box-shadow: 0 8px 20px rgb(34 197 94 / 10%);
+}
+
+.topicUpdateToggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topicUpdatePanel.isExpanded .referenceChevron {
+  transform: rotate(90deg);
+}
+
+.topicUpdateBody {
+  display: grid;
+  gap: 12px;
+  width: min(640px, 100%);
+  border: 1px solid #dcfce7;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f7fef9, #ffffff);
+  padding: 11px 12px;
+  animation: referenceIn 160ms ease-out;
+}
+
+.topicUpdatePanel.noNew .topicUpdateBody {
+  border-color: #e2e8f0;
+  background: #fbfdff;
+}
+
+.topicUpdateGroup {
+  display: grid;
+  gap: 8px;
+}
+
+.topicUpdateList {
+  display: grid;
+  gap: 8px;
+}
+
+.topicUpdateList.compact {
+  gap: 6px;
+}
+
+.topicUpdateItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  border-left: 2px solid #cbd5e1;
+  padding-left: 8px;
+}
+
+.topicUpdateItem.isNew {
+  border-left-color: #22c55e;
+}
+
+.topicUpdateCopy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.topicUpdateSummary {
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.topicUpdateCopy a {
+  width: fit-content;
+  color: #15803d;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.topicUpdateCopy a:hover {
+  text-decoration: underline;
+}
+
 .referenceToggle {
   display: inline-flex;
   align-items: center;

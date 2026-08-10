@@ -71,10 +71,11 @@ class ReActConfig:
         
         "# 长期关注话题决策流程\n"
         "1. 如果用户明确表达“帮我关注”“持续关注”“长期跟踪”“记录下来”“保存到本地”“维护时间线”等意图，必须进入 Markdown 话题记忆流程。\n"
-        "2. 如果用户没有明确长期关注意图，但输入中包含“上次”“之前”“关注过”“那个话题”“怎么样了”“更新一下”等指代，或可能命中已有关注话题，必须先调用 topic_markdown_read_summary 判断是否存在本地相关话题。\n"
-        "3. 如果 topic_markdown_read_summary 返回相关候选，必须调用 topic_markdown_read_detail 读取完整 Markdown 内容，再结合 doubao_search 的最新结果进行更新。\n"
-        "4. 如果 topic_markdown_read_summary 没有返回相关候选，并且用户也没有明确关注、记录、保存意图，则只进行普通查询和回答，禁止调用 topic_markdown_store。\n"
-        "5. 如果用户只是查询、了解、分析、总结一个从未存储过的普通话题，本次会话直接回答用户即可，禁止写入 Markdown 记忆。\n\n"
+        "2. 系统消息中的“本地已关注话题候选”是强约束：只要候选 topics 非空且与用户本次问题相关，即使用户没有再次说“持续关注”，也必须按已关注话题处理。\n"
+        "3. 如果用户没有明确长期关注意图，但输入中包含“上次”“之前”“关注过”“那个话题”“怎么样了”“更新一下”“走势”“最近”“最新”等表达，必须调用 topic_markdown_read_summary 判断是否存在本地相关话题。\n"
+        "4. 如果 topic_markdown_read_summary 返回相关候选，或系统消息中的“本地已关注话题候选”已经给出相关候选，必须调用 topic_markdown_read_detail 读取完整 Markdown 内容，再结合 doubao_search 的最新结果进行更新。\n"
+        "5. 如果 topic_markdown_read_summary 没有返回相关候选，并且用户也没有明确关注、记录、保存意图，则只进行普通查询和回答，禁止调用 topic_markdown_store。\n"
+        "6. 如果用户只是查询、了解、分析、总结一个从未存储过的普通话题，本次会话直接回答用户即可，禁止写入 Markdown 记忆。\n\n"
         
         "# Markdown 话题记忆写入流程\n"
         "当需要创建或更新本地 Markdown 话题记忆时，按以下顺序执行：\n"
@@ -96,6 +97,7 @@ class ReActConfig:
         "final_answer 的值必须是一个合法 JSON 字符串；也就是说，外层是 ReAct JSON，内层 final_answer 是经过转义的 JSON 字符串。\n"
         "final_answer 内层 JSON 的 summary 必须是面向用户的自然语言或 Markdown 正文，禁止把另一段 JSON、final_answer、items、reference_data 或 <think> 内容塞进 summary。\n"
         "如果本次流程调用过 doubao_search，final_answer 内层 JSON 必须包含 query_key 和 reference_data。query_key 是实际搜索关键词；reference_data 是参考资料对象数组，每个对象必须只包含 title 和 url 两个英文 key，禁止使用中文 key。\n"
+        "如果本次流程调用过 topic_markdown_store，final_answer 内层 JSON 必须包含 topic_update，用于标识本次话题记忆更新的新旧信息；topic_update 必须包含 topic_name、status、new_count、existing_count、new_items、existing_items。\n"
         "最终回答必须使用中文，并且必须是结构化数据。\n"
     )
 
@@ -347,6 +349,10 @@ class ReActAgent:
             answer,
             query,
             tool_observations.get("doubao_search"),
+        )
+        answer = self._augment_answer_with_topic_update(
+            answer,
+            tool_observations.get("topic_markdown_store"),
         )
 
         if self._memory_store and self._config.save_final_answer_to_memory:
@@ -634,6 +640,10 @@ class ReActAgent:
             query,
             tool_observations.get("doubao_search"),
         )
+        answer = self._augment_answer_with_topic_update(
+            answer,
+            tool_observations.get("topic_markdown_store"),
+        )
         if self._memory_store and self._config.save_final_answer_to_memory:
             self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
         self._save_session_history(session_id, query, answer, completed)
@@ -699,6 +709,7 @@ class ReActAgent:
         tool_text = self._format_tools()
         memory_text = self._format_memories(user_id, query)
         session_text = self._format_session(session_id)
+        local_topic_text = self._format_local_topic_candidates(query)
         history_messages = self._session_history_messages(session_id)
         current_time = datetime.now().isoformat(timespec="seconds")
 
@@ -710,6 +721,7 @@ class ReActAgent:
                     f"当前系统时间：{current_time}\n\n"
                     f"可用工具：\n{tool_text}\n\n"
                     f"相关记忆：\n{memory_text}\n\n"
+                    f"本地已关注话题候选：\n{local_topic_text}\n\n"
                     f"会话上下文：\n{session_text}"
                 ),
             ),
@@ -782,6 +794,37 @@ class ReActAgent:
         if not memories:
             return "没有相关记忆。"
         return "\n".join(f"- {record.content}" for record in memories)
+
+    def _format_local_topic_candidates(self, query: str) -> str:
+        if not self._tool_registry.has("topic_markdown_read_summary"):
+            return "未注册本地话题摘要读取工具。"
+        try:
+            result = self._tool_registry.get("topic_markdown_read_summary").handler(
+                query=query,
+                limit=5,
+            )
+        except Exception as exc:
+            return f"读取本地话题候选失败：{exc}"
+        topics = result.get("topics") if isinstance(result, dict) else None
+        if not isinstance(topics, list) or not topics:
+            return "没有命中的本地已关注话题。"
+        matched_topics = [
+            topic for topic in topics
+            if isinstance(topic, dict) and int(topic.get("match_score") or 0) > 0
+        ]
+        if not matched_topics:
+            return "没有命中的本地已关注话题。"
+        return json.dumps(
+            {
+                "说明": (
+                    "如果用户本次问题与下列候选话题相关，即使用户没有再次说“持续关注”，"
+                    "也必须按已关注话题更新流程处理：读取详情、联网搜索、合并更新、返回新旧信息标识。"
+                ),
+                "topics": matched_topics,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
 
     def _format_session(self, session_id: str | None) -> str:
         if not self._session_manager or not session_id:
@@ -1149,11 +1192,74 @@ class ReActAgent:
             nested_payload = cls._answer_payload(summary)
             if nested_payload and nested_payload.get("summary"):
                 merged = dict(nested_payload)
-                for key in ("query_key", "reference_data"):
+                for key in ("query_key", "reference_data", "topic_update"):
                     if key not in merged and payload.get(key):
                         merged[key] = payload[key]
                 return merged
         return payload
+
+    @classmethod
+    def _augment_answer_with_topic_update(
+        cls,
+        answer: str,
+        store_result: Any,
+    ) -> str:
+        topic_update = cls._topic_update_from_store_result(store_result)
+        if not topic_update:
+            return answer
+
+        payload = cls._answer_payload(answer)
+        if payload is None:
+            payload = {"summary": answer}
+        payload.setdefault("topic_update", topic_update)
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    @staticmethod
+    def _topic_update_from_store_result(store_result: Any) -> dict[str, Any] | None:
+        if not isinstance(store_result, dict):
+            return None
+        topic_name = str(store_result.get("topic_name") or "").strip()
+        if not topic_name:
+            return None
+        new_items = store_result.get("new_items")
+        if not isinstance(new_items, list):
+            new_items = store_result.get("appended_items")
+        existing_items = store_result.get("existing_items")
+        if not isinstance(existing_items, list):
+            existing_items = []
+        new_count = int(store_result.get("new_count") or store_result.get("appended_count") or 0)
+        existing_count = int(store_result.get("existing_count") or 0)
+        return {
+            "topic_name": topic_name,
+            "operation": store_result.get("operation") or "",
+            "status": store_result.get("update_status") or ("updated_with_new_items" if new_count else "no_new_items"),
+            "new_count": new_count,
+            "existing_count": existing_count,
+            "new_items": ReActAgent._compact_topic_items(new_items if isinstance(new_items, list) else []),
+            "existing_items": ReActAgent._compact_topic_items(existing_items),
+        }
+
+    @staticmethod
+    def _compact_topic_items(items: list[Any], *, limit: int = 8) -> list[dict[str, str]]:
+        compacted: list[dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            compacted.append(
+                {
+                    "date": str(item.get("date") or "").strip(),
+                    "title": title,
+                    "source": str(item.get("source") or "").strip(),
+                    "url": str(item.get("url") or "").strip(),
+                    "summary": str(item.get("summary") or "").strip(),
+                }
+            )
+            if len(compacted) >= limit:
+                break
+        return compacted
 
     @staticmethod
     def _query_key_from_search_result(search_result: Any, fallback_query: str) -> str:

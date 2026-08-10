@@ -39,6 +39,43 @@ class ReActSearchReferenceTests(unittest.TestCase):
             ],
         )
 
+    def test_augment_answer_with_topic_update(self):
+        answer = '{"summary": "已更新关注话题", "items": []}'
+        store_result = {
+            "topic_name": "内存条价格走势",
+            "operation": "update",
+            "update_status": "updated_with_new_items",
+            "new_count": 1,
+            "existing_count": 2,
+            "new_items": [
+                {
+                    "date": "2026-08-10",
+                    "title": "DDR5 价格继续上涨",
+                    "source": "示例新闻",
+                    "url": "https://example.com/new",
+                    "summary": "DDR5 现货价格继续上行。",
+                }
+            ],
+            "existing_items": [
+                {
+                    "date": "2026-08-01",
+                    "title": "此前已经记录的价格上涨",
+                    "source": "旧来源",
+                    "url": "https://example.com/old",
+                    "summary": "此前记录。",
+                }
+            ],
+        }
+
+        augmented = ReActAgent._augment_answer_with_topic_update(answer, store_result)
+
+        payload = json.loads(augmented)
+        self.assertEqual(payload["topic_update"]["topic_name"], "内存条价格走势")
+        self.assertEqual(payload["topic_update"]["new_count"], 1)
+        self.assertEqual(payload["topic_update"]["existing_count"], 2)
+        self.assertEqual(payload["topic_update"]["new_items"][0]["title"], "DDR5 价格继续上涨")
+        self.assertEqual(payload["topic_update"]["existing_items"][0]["title"], "此前已经记录的价格上涨")
+
 
 if __name__ == "__main__":
     unittest.main()

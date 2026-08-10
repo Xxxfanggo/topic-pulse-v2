@@ -160,6 +160,86 @@ function ReferencePanel({ queryKey, referenceData }) {
   );
 }
 
+function normalizeTopicItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => ({
+      date: String(item?.date || '').trim(),
+      title: String(item?.title || '').trim(),
+      source: String(item?.source || '').trim(),
+      url: String(item?.url || '').trim(),
+      summary: String(item?.summary || '').trim(),
+    }))
+    .filter((item) => item.title);
+}
+
+function TopicUpdatePanel({ update }) {
+  const [expanded, setExpanded] = useState(true);
+  if (!update || !update.topic_name) return null;
+
+  const newItems = normalizeTopicItems(update.new_items);
+  const existingItems = normalizeTopicItems(update.existing_items);
+  const newCount = Number(update.new_count || newItems.length || 0);
+  const existingCount = Number(update.existing_count || existingItems.length || 0);
+  const hasNew = newCount > 0;
+  const statusText = hasNew
+    ? `本次发现 ${newCount} 条新信息`
+    : '本次未发现新增信息';
+
+  return (
+    <div className={`topicUpdatePanel ${expanded ? 'isExpanded' : ''} ${hasNew ? 'hasNew' : 'noNew'}`}>
+      <button type="button" className="topicUpdateToggle" onClick={() => setExpanded((value) => !value)}>
+        <StarOutlined />
+        <span>{update.topic_name}：{statusText}</span>
+        {existingCount > 0 && <Tag color="default">已有 {existingCount}</Tag>}
+        <RightOutlined className="referenceChevron" />
+      </button>
+      {expanded && (
+        <div className="topicUpdateBody">
+          {newItems.length > 0 && (
+            <div className="topicUpdateGroup">
+              <Text strong>新增信息</Text>
+              <div className="topicUpdateList">
+                {newItems.slice(0, 6).map((item, index) => (
+                  <div className="topicUpdateItem isNew" key={`${item.url || item.title}-${index}`}>
+                    <Tag color="success">新增</Tag>
+                    <div className="topicUpdateCopy">
+                      <Text strong>{item.title}</Text>
+                      <Text type="secondary">
+                        {[item.date, item.source].filter(Boolean).join(' · ')}
+                      </Text>
+                      {item.summary && <Text className="topicUpdateSummary">{item.summary}</Text>}
+                      {item.url && <a href={item.url} target="_blank" rel="noreferrer">查看来源</a>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {existingItems.length > 0 && (
+            <div className="topicUpdateGroup">
+              <Text strong>已记录信息</Text>
+              <div className="topicUpdateList compact">
+                {existingItems.slice(0, 4).map((item, index) => (
+                  <div className="topicUpdateItem" key={`${item.url || item.title}-${index}`}>
+                    <Tag>已记录</Tag>
+                    <div className="topicUpdateCopy">
+                      <Text>{item.title}</Text>
+                      <Text type="secondary">
+                        {[item.date, item.source].filter(Boolean).join(' · ')}
+                      </Text>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PulseGraph() {
   return (
     <div className="pulseGraph" aria-hidden="true">
@@ -186,7 +266,10 @@ function MessageBubble({ message, onCopy }) {
         </Flex>
         <Card size="small" className="bubbleCard">
           {!isUser && !message.error && (
-            <ReferencePanel queryKey={message.query_key} referenceData={message.reference_data} />
+            <>
+              <TopicUpdatePanel update={message.topic_update} />
+              <ReferencePanel queryKey={message.query_key} referenceData={message.reference_data} />
+            </>
           )}
           {!isUser && message.status && !message.content && (
             <Text type="secondary" className="messageStatus">
@@ -308,6 +391,7 @@ function TopicPulseApp() {
             completed: message.completed,
             query_key: message.query_key,
             reference_data: message.reference_data || [],
+            topic_update: message.topic_update || {},
             at: message.created_at,
           })),
       );
@@ -446,6 +530,7 @@ function TopicPulseApp() {
         status: '正在连接',
         query_key: null,
         reference_data: [],
+        topic_update: {},
         steps: [],
         at: new Date().toISOString(),
       },
@@ -509,6 +594,13 @@ function TopicPulseApp() {
             scrollConversationToBottom();
           }
 
+          if (event.type === 'topic_update') {
+            updateAssistantMessage(() => ({
+              topic_update: event.topic_update || {},
+            }));
+            scrollConversationToBottom();
+          }
+
           if (event.type === 'delta') {
             updateAssistantMessage((item) => ({
               content: `${item.content || ''}${event.content || ''}`,
@@ -527,6 +619,7 @@ function TopicPulseApp() {
               completed: event.completed,
               query_key: event.query_key,
               reference_data: event.reference_data || [],
+              topic_update: event.topic_update || {},
               steps: event.steps || [],
               status: '',
             }));

@@ -83,6 +83,12 @@ def topic_markdown_store(
         )
     appended_items = store.append_timeline_items(topic_name, inferred_timeline_items)
     document_after = store.update_summary(topic_name, inferred_summary) if inferred_summary else store.read_topic(topic_name)
+    appended_keys = {store._timeline_key(item) for item in appended_items}
+    existing_items = [
+        item
+        for item in document_after.timeline_items
+        if store._timeline_key(item) not in appended_keys
+    ]
 
     return {
         "topic_name": document_after.name,
@@ -94,6 +100,11 @@ def topic_markdown_store(
         "appended_count": len(appended_items),
         "timeline_count": len(document_after.timeline_items),
         "appended_items": [_timeline_item_to_dict(item) for item in appended_items],
+        "new_count": len(appended_items),
+        "existing_count": len(existing_items),
+        "new_items": [_timeline_item_to_dict(item) for item in appended_items],
+        "existing_items": [_timeline_item_to_dict(item) for item in existing_items[:8]],
+        "update_status": "created" if created else ("updated_with_new_items" if appended_items else "no_new_items"),
     }
 
 

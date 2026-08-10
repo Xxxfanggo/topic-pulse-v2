@@ -232,4 +232,20 @@ def _match_score(query: str, haystack: str) -> int:
     for token in re.split(r"[\s,，、。；;：:（）()]+", query):
         if len(token) >= 2 and token in haystack:
             score += 1
+        for fragment in _cjk_fragments(token):
+            if fragment in haystack:
+                score += 1
     return score
+
+
+def _cjk_fragments(value: str) -> list[str]:
+    fragments: list[str] = []
+    for segment in re.findall(r"[\u4e00-\u9fff]{2,}", value):
+        for size in (3, 2):
+            if len(segment) < size:
+                continue
+            fragments.extend(
+                segment[index : index + size]
+                for index in range(0, len(segment) - size + 1)
+            )
+    return fragments

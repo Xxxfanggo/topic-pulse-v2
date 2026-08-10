@@ -39,6 +39,14 @@ class TopicMarkdownReadToolsTests(unittest.TestCase):
             self.assertEqual(summary_result["topics"][0]["topic_name"], "互联网大厂因 AI 裁员")
             self.assertIn("互联网大厂", summary_result["topics"][0]["keywords"])
 
+            fuzzy_summary_result = topic_markdown_read_summary(
+                "查一下互联网大厂最近因 AI 优化岗位的走势",
+                root_dir=temp_dir,
+            )
+            self.assertEqual(fuzzy_summary_result["count"], 1)
+            self.assertEqual(fuzzy_summary_result["topics"][0]["topic_name"], "互联网大厂因 AI 裁员")
+            self.assertGreater(fuzzy_summary_result["topics"][0]["match_score"], 0)
+
             detail_result = topic_markdown_read_detail(path=created["path"], root_dir=temp_dir)
             self.assertEqual(detail_result["topic_name"], "互联网大厂因 AI 裁员")
             self.assertEqual(detail_result["timeline_count"], 1)

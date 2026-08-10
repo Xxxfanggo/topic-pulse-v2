@@ -245,6 +245,41 @@ class ChatWebAppTests(unittest.TestCase):
             [{"title": "内存条价格持续上涨", "url": "https://example.com/news-1"}],
         )
 
+    def test_chat_returns_topic_update_metadata(self):
+        class TopicUpdateRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                return SimpleNamespace(
+                    answer=(
+                        '{"summary":"已更新关注话题","items":[],'
+                        '"topic_update":{'
+                        '"topic_name":"内存条价格走势",'
+                        '"status":"updated_with_new_items",'
+                        '"new_count":1,'
+                        '"existing_count":2,'
+                        '"new_items":[{"date":"2026-08-10","title":"DDR5 价格继续上涨","source":"示例新闻","url":"https://example.com/new","summary":"价格继续上行"}],'
+                        '"existing_items":[{"date":"2026-08-01","title":"此前已记录的价格上涨","source":"旧来源","url":"https://example.com/old"}]'
+                        '}}'
+                    ),
+                    session_id="session-topic-update",
+                    completed=True,
+                    steps=[],
+                )
+
+        client = TestClient(create_app(chat_runtime=TopicUpdateRuntime()))
+        chat = client.post(
+            "/api/chat",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "上次关注的内存条价格怎么样了",
+            },
+        )
+
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["answer"], "已更新关注话题")
+        self.assertEqual(chat.json()["topic_update"]["topic_name"], "内存条价格走势")
+        self.assertEqual(chat.json()["topic_update"]["new_count"], 1)
+        self.assertEqual(chat.json()["topic_update"]["new_items"][0]["title"], "DDR5 价格继续上涨")
+
     def test_chat_formats_think_prefixed_structured_answer_summary_only(self):
         class ThinkStructuredRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):

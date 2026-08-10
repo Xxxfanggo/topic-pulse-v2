@@ -253,6 +253,46 @@ def _answer_reference_data(answer: str) -> list[dict[str, str]]:
     return normalized
 
 
+def _answer_topic_update(answer: str) -> dict:
+    payload = _answer_payload(answer)
+    if not payload:
+        return {}
+    update = payload.get("topic_update")
+    if not isinstance(update, dict):
+        return {}
+
+    def normalize_items(value) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        normalized = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("标题") or "").strip()
+            if not title:
+                continue
+            normalized.append(
+                {
+                    "date": str(item.get("date") or item.get("日期") or "").strip(),
+                    "title": title,
+                    "source": str(item.get("source") or item.get("来源") or "").strip(),
+                    "url": str(item.get("url") or item.get("链接") or "").strip(),
+                    "summary": str(item.get("summary") or item.get("摘要") or "").strip(),
+                }
+            )
+        return normalized
+
+    return {
+        "topic_name": str(update.get("topic_name") or update.get("话题") or "").strip(),
+        "operation": str(update.get("operation") or "").strip(),
+        "status": str(update.get("status") or "").strip(),
+        "new_count": int(update.get("new_count") or 0),
+        "existing_count": int(update.get("existing_count") or 0),
+        "new_items": normalize_items(update.get("new_items")),
+        "existing_items": normalize_items(update.get("existing_items")),
+    }
+
+
 def _strip_think_blocks(content: str) -> str:
     return re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
 
@@ -353,6 +393,7 @@ def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage
                 completed=message.metadata.get("completed"),
                 query_key=_answer_query_key(message.content) if message.role == "assistant" else None,
                 reference_data=_answer_reference_data(message.content) if message.role == "assistant" else [],
+                topic_update=_answer_topic_update(message.content) if message.role == "assistant" else {},
             )
         )
     return formatted
@@ -415,6 +456,7 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
             completed=result.completed,
             query_key=_answer_query_key(result.answer),
             reference_data=_answer_reference_data(result.answer),
+            topic_update=_answer_topic_update(result.answer),
             steps=react_result_steps_to_dict(result),
         )
 
@@ -490,6 +532,7 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
             answer = _display_answer(result.answer)
             query_key = _answer_query_key(result.answer)
             reference_data = _answer_reference_data(result.answer)
+            topic_update = _answer_topic_update(result.answer)
             steps = react_result_steps_to_dict(result)
 
             if query_key or reference_data:
@@ -498,6 +541,8 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
                     query_key=query_key,
                     reference_data=reference_data,
                 )
+            if topic_update:
+                yield _stream_event("topic_update", topic_update=topic_update)
 
             if not streamed_answer:
                 yield _stream_event("status", text="正在生成回答")
@@ -516,6 +561,7 @@ def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
                 completed=result.completed,
                 query_key=query_key,
                 reference_data=reference_data,
+                topic_update=topic_update,
                 steps=steps,
             )
 
