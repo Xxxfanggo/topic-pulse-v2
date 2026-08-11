@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from datetime import datetime
 from time import perf_counter
 from typing import Any
@@ -150,7 +151,10 @@ class SchedulerService:
     def _result_summary(result: Any) -> str:
         if result is None:
             return ""
-        text = str(result)
+        if isinstance(result, (dict, list)):
+            text = json.dumps(result, ensure_ascii=False, default=str)
+        else:
+            text = str(result)
         if len(text) > 500:
             return f"{text[:497]}..."
         return text

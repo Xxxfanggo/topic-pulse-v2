@@ -523,9 +523,9 @@ def _session_store() -> MarkdownSessionHistoryStore:
 
 
 
-def _create_scheduler_service() -> SchedulerService:
+def _create_scheduler_service(chat_runtime: ChatRuntime | None = None) -> SchedulerService:
     registry = ScheduledTaskRegistry()
-    register_builtin_tasks(registry)
+    register_builtin_tasks(registry, chat_runtime=chat_runtime)
     return SchedulerService(
         store=SQLiteSchedulerStore(),
         registry=registry,
@@ -599,7 +599,7 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.scheduler_service = scheduler_service or _create_scheduler_service()
+        app.state.scheduler_service = scheduler_service or _create_scheduler_service(app.state.chat_runtime)
         app.state.scheduler_service.start()
         try:
             yield

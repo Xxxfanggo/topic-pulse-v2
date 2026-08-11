@@ -16,8 +16,27 @@ except ModuleNotFoundError:
 
 
 class FakeChatRuntime:
+    def __init__(self):
+        self.calls = []
+
     def chat(self, *, user_id, message, session_id=None, metadata=None):
-        raise AssertionError("chat should not be called")
+        self.calls.append(
+            {
+                "user_id": user_id,
+                "message": message,
+                "session_id": session_id,
+                "metadata": metadata,
+            }
+        )
+        return type(
+            "FakeResult",
+            (),
+            {
+                "answer": '{"summary":"updated","topic_update":{"topic_name":"Memory Prices","new_count":1,"existing_count":3}}',
+                "session_id": "scheduler-session",
+                "completed": True,
+            },
+        )()
 
 
 @unittest.skipIf(TestClient is None, "fastapi is not installed")
@@ -82,6 +101,33 @@ class WebSchedulerApiTests(unittest.TestCase):
                     self.assertEqual(run.json()["status"], "success")
                     self.assertEqual(runs.status_code, 200)
                     self.assertEqual(runs.json()["runs"][0]["job_id"], job_id)
+
+    def test_default_scheduler_uses_app_chat_runtime_for_manual_refresh(self):
+        with TemporaryDirectory() as temp_dir:
+            web_app_module = importlib.import_module("topic_pulse_v2_chat.web.app")
+            root = Path(temp_dir)
+            topics_dir = root / "topics"
+            topics_dir.mkdir()
+            (topics_dir / "memory-prices.md").write_text(
+                "# Memory Prices\n\n## Summary\n\nTracked topic.\n",
+                encoding="utf-8",
+            )
+            chat_runtime = FakeChatRuntime()
+
+            with patch.object(web_app_module, "TOPICS_DIR", topics_dir):
+                with patch.object(web_app_module, "SQLiteSchedulerStore") as store_class:
+                    store_class.return_value = SQLiteSchedulerStore(path=root / "topic_pulse.sqlite3")
+                    with TestClient(create_app(chat_runtime=chat_runtime)) as client:
+                        created = client.post(
+                            "/api/topics/memory-prices/schedule",
+                            json={"trigger": "interval", "interval_minutes": 30},
+                        )
+                        run = client.post(f"/api/scheduler/jobs/{created.json()['id']}/run")
+
+            self.assertEqual(run.status_code, 200)
+            self.assertEqual(run.json()["status"], "success")
+            self.assertIn('"new_count": 1', run.json()["result_summary"])
+            self.assertEqual(chat_runtime.calls[0]["metadata"]["source"], "scheduler")
 
     def test_topic_schedule_returns_not_found_for_missing_topic(self):
         with TemporaryDirectory() as temp_dir:
