@@ -37,9 +37,9 @@ class SchedulerService:
     def start(self) -> None:
         """Initialize persistence, load active jobs, and start APScheduler."""
 
+        self._store.initialize()
         if not self._enabled:
             return
-        self._store.initialize()
         scheduler = self._create_scheduler()
         self._scheduler = scheduler
         for job in self._store.list_jobs():
@@ -50,6 +50,7 @@ class SchedulerService:
     def shutdown(self, *, wait: bool = False) -> None:
         if self._scheduler is not None and self._scheduler.running:
             self._scheduler.shutdown(wait=wait)
+        self._store.close()
 
     def add_job(self, job: ScheduledJob) -> ScheduledJob:
         self._store.save_job(job)

@@ -9,7 +9,7 @@ from topic_pulse_v2.scheduler.models import JobRun
 class SchedulerStoreTests(unittest.TestCase):
     def test_save_and_list_jobs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            store = SQLiteSchedulerStore(path=Path(temp_dir) / "scheduler.sqlite3")
+            store = SQLiteSchedulerStore(path=Path(temp_dir) / "topic_pulse.sqlite3")
             try:
                 store.initialize()
                 job = ScheduledJob(
@@ -35,7 +35,7 @@ class SchedulerStoreTests(unittest.TestCase):
 
     def test_save_and_list_runs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            store = SQLiteSchedulerStore(path=Path(temp_dir) / "scheduler.sqlite3")
+            store = SQLiteSchedulerStore(path=Path(temp_dir) / "topic_pulse.sqlite3")
             try:
                 store.initialize()
                 store.save_job(

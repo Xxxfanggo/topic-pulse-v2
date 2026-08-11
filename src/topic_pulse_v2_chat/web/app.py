@@ -6,11 +6,11 @@ import json
 import logging
 import re
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid5, NAMESPACE_URL
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,13 +18,18 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from topic_pulse_v2.scheduler import SchedulerService, ScheduledTaskRegistry, SQLiteSchedulerStore
+from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage
 from topic_pulse_v2_chat.web.schemas import (
     ChatRequest,
     ChatResponse,
+    CreateTopicRefreshJobRequest,
     HealthResponse,
+    JobRunListResponse,
+    JobRunResponse,
+    SchedulerJobListResponse,
+    SchedulerJobResponse,
     SessionChatMessage,
     SessionDetailResponse,
     SessionListResponse,
@@ -58,6 +63,24 @@ class SchedulerRuntime(Protocol):
         ...
 
     def shutdown(self, *, wait: bool = False) -> None:
+        ...
+
+    def add_job(self, job: ScheduledJob) -> ScheduledJob:
+        ...
+
+    def pause_job(self, job_id: str) -> ScheduledJob:
+        ...
+
+    def resume_job(self, job_id: str) -> ScheduledJob:
+        ...
+
+    async def run_job_now(self, job_id: str):
+        ...
+
+    def list_jobs(self) -> list[ScheduledJob]:
+        ...
+
+    def list_runs(self, job_id: str | None = None, *, limit: int = 50):
         ...
 
 
@@ -117,6 +140,60 @@ def _model_data(model) -> dict:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _scheduler_job_response(job: ScheduledJob) -> SchedulerJobResponse:
+    return SchedulerJobResponse(
+        id=job.id,
+        task_name=job.task_name,
+        trigger=job.trigger,
+        trigger_args=job.trigger_args,
+        args=job.args,
+        kwargs=job.kwargs,
+        status=job.status,
+        name=job.name,
+        description=job.description,
+        metadata=job.metadata,
+        created_at=job.created_at.isoformat(),
+        updated_at=job.updated_at.isoformat(),
+    )
+
+
+def _job_run_response(run) -> JobRunResponse:
+    return JobRunResponse(
+        id=run.id,
+        job_id=run.job_id,
+        task_name=run.task_name,
+        status=run.status,
+        started_at=run.started_at.isoformat(),
+        finished_at=run.finished_at.isoformat() if run.finished_at else None,
+        duration_ms=run.duration_ms,
+        error=run.error,
+        result_summary=run.result_summary,
+        metadata=run.metadata,
+    )
+
+
+def _topic_refresh_job_id(topic_id: str) -> str:
+    return f"topic-refresh-{uuid5(NAMESPACE_URL, f'topic-pulse/topic/{topic_id}')}"
+
+
+def _find_topic_refresh_job(scheduler: SchedulerRuntime, topic_id: str) -> ScheduledJob | None:
+    for job in scheduler.list_jobs():
+        metadata = job.metadata or {}
+        if metadata.get("type") == "topic_refresh" and metadata.get("topic_id") == topic_id:
+            return job
+    return None
+
+
+def _topic_refresh_trigger_args(request: CreateTopicRefreshJobRequest) -> tuple[str, dict]:
+    if request.trigger == "interval":
+        return "interval", {"minutes": request.interval_minutes}
+    if request.trigger == "cron":
+        if request.cron_hour is None or request.cron_minute is None:
+            raise HTTPException(status_code=422, detail="cron_hour and cron_minute are required for cron trigger")
+        return "cron", {"hour": request.cron_hour, "minute": request.cron_minute}
+    raise HTTPException(status_code=422, detail="trigger must be one of: interval, cron")
 
 
 def _stream_event(event_type: str, **payload) -> str:
@@ -739,6 +816,90 @@ def create_app(
             raise HTTPException(status_code=404, detail="Topic not found")
         summary = _topic_summary(path)
         return TopicDetailResponse(**_model_data(summary), content=path.read_text(encoding="utf-8"))
+
+    @app.get("/api/scheduler/jobs", response_model=SchedulerJobListResponse)
+    def list_scheduler_jobs() -> SchedulerJobListResponse:
+        return SchedulerJobListResponse(
+            jobs=[_scheduler_job_response(job) for job in app.state.scheduler_service.list_jobs()]
+        )
+
+    @app.post("/api/topics/{topic_id}/schedule", response_model=SchedulerJobResponse)
+    def create_topic_refresh_schedule(
+        topic_id: str,
+        request: CreateTopicRefreshJobRequest,
+    ) -> SchedulerJobResponse:
+        path = _topic_path(topic_id)
+        if not path.exists() or not path.is_file():
+            raise HTTPException(status_code=404, detail="Topic not found")
+        existing = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
+        if existing is not None:
+            return _scheduler_job_response(existing)
+
+        topic = _topic_summary(path)
+        trigger, trigger_args = _topic_refresh_trigger_args(request)
+        now = datetime.now(timezone.utc)
+        job = ScheduledJob(
+            id=_topic_refresh_job_id(topic_id),
+            task_name="refresh_topic",
+            trigger=trigger,
+            trigger_args=trigger_args,
+            kwargs={
+                "topic_name": topic.title,
+            },
+            status="active" if request.enabled else "paused",
+            name=f"Refresh topic: {topic.title}",
+            description="Refresh one tracked topic from the web and update local Markdown memory.",
+            metadata={
+                "type": "topic_refresh",
+                "topic_id": topic.id,
+                "topic_title": topic.title,
+                "topic_filename": topic.filename,
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        return _scheduler_job_response(app.state.scheduler_service.add_job(job))
+
+    @app.get("/api/topics/{topic_id}/schedule", response_model=SchedulerJobResponse | None)
+    def get_topic_refresh_schedule(topic_id: str):
+        path = _topic_path(topic_id)
+        if not path.exists() or not path.is_file():
+            raise HTTPException(status_code=404, detail="Topic not found")
+        job = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
+        return _scheduler_job_response(job) if job is not None else None
+
+    @app.post("/api/scheduler/jobs/{job_id}/pause", response_model=SchedulerJobResponse)
+    def pause_scheduler_job(job_id: str) -> SchedulerJobResponse:
+        try:
+            job = app.state.scheduler_service.pause_job(job_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
+        return _scheduler_job_response(job)
+
+    @app.post("/api/scheduler/jobs/{job_id}/resume", response_model=SchedulerJobResponse)
+    def resume_scheduler_job(job_id: str) -> SchedulerJobResponse:
+        try:
+            job = app.state.scheduler_service.resume_job(job_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
+        return _scheduler_job_response(job)
+
+    @app.post("/api/scheduler/jobs/{job_id}/run", response_model=JobRunResponse)
+    async def run_scheduler_job(job_id: str) -> JobRunResponse:
+        try:
+            run = await app.state.scheduler_service.run_job_now(job_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
+        return _job_run_response(run)
+
+    @app.get("/api/scheduler/jobs/{job_id}/runs", response_model=JobRunListResponse)
+    def list_scheduler_job_runs(job_id: str) -> JobRunListResponse:
+        jobs = {job.id for job in app.state.scheduler_service.list_jobs()}
+        if job_id not in jobs:
+            raise HTTPException(status_code=404, detail="Scheduled job not found")
+        return JobRunListResponse(
+            runs=[_job_run_response(run) for run in app.state.scheduler_service.list_runs(job_id)]
+        )
 
     @app.get("/api/sessions", response_model=SessionListResponse)
     def list_sessions() -> SessionListResponse:

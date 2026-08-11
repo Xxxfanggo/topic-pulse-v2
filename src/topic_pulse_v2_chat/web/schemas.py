@@ -72,3 +72,47 @@ class SessionListResponse(BaseModel):
 
 class SessionDetailResponse(SessionSummary):
     messages: list[SessionChatMessage] = Field(default_factory=list)
+
+
+class CreateTopicRefreshJobRequest(BaseModel):
+    trigger: str = Field(default="interval", description="Scheduler trigger type: interval or cron.")
+    interval_minutes: int = Field(default=60, ge=1, description="Refresh interval in minutes.")
+    cron_hour: int | None = Field(default=None, ge=0, le=23, description="Cron hour for daily refresh.")
+    cron_minute: int | None = Field(default=None, ge=0, le=59, description="Cron minute for daily refresh.")
+    enabled: bool = Field(default=True, description="Whether the created topic refresh job is active.")
+
+
+class SchedulerJobResponse(BaseModel):
+    id: str
+    task_name: str
+    trigger: str
+    trigger_args: dict = Field(default_factory=dict)
+    args: list = Field(default_factory=list)
+    kwargs: dict = Field(default_factory=dict)
+    status: str
+    name: str = ""
+    description: str = ""
+    metadata: dict = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class SchedulerJobListResponse(BaseModel):
+    jobs: list[SchedulerJobResponse] = Field(default_factory=list)
+
+
+class JobRunResponse(BaseModel):
+    id: str
+    job_id: str
+    task_name: str
+    status: str
+    started_at: str
+    finished_at: str | None = None
+    duration_ms: float | None = None
+    error: str = ""
+    result_summary: str = ""
+    metadata: dict = Field(default_factory=dict)
+
+
+class JobRunListResponse(BaseModel):
+    runs: list[JobRunResponse] = Field(default_factory=list)
