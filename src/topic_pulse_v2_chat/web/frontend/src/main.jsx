@@ -11,7 +11,15 @@ import LoadingAssistantMessage from './components/LoadingAssistantMessage.jsx';
 import MessageBubble from './components/MessageBubble.jsx';
 import TopicDetailPage from './pages/TopicDetailPage.jsx';
 import TopicListPage from './pages/TopicListPage.jsx';
-import { readApiResponse } from './utils/api.js';
+import {
+  createTopicSchedule,
+  getSchedulerJobRuns,
+  getTopicSchedule,
+  pauseSchedulerJob,
+  readApiResponse,
+  resumeSchedulerJob,
+  runSchedulerJob,
+} from './utils/api.js';
 import { getOrCreateUserId, mergeAgentStep } from './utils/chat.js';
 import './styles.css';
 
@@ -35,6 +43,11 @@ function TopicPulseApp() {
   const [topicsLoading, setTopicsLoading] = useState(false);
   const [topicDetailLoading, setTopicDetailLoading] = useState(false);
   const [topicsError, setTopicsError] = useState('');
+  const [topicSchedule, setTopicSchedule] = useState(null);
+  const [topicScheduleRuns, setTopicScheduleRuns] = useState([]);
+  const [topicScheduleLoading, setTopicScheduleLoading] = useState(false);
+  const [topicScheduleActionLoading, setTopicScheduleActionLoading] = useState('');
+  const [topicScheduleError, setTopicScheduleError] = useState('');
   const [userId] = useState(getOrCreateUserId);
   const inputRef = useRef(null);
   const conversationPaneRef = useRef(null);
@@ -152,6 +165,90 @@ function TopicPulseApp() {
     }
   }
 
+  async function loadTopicSchedule(topicId) {
+    if (!topicId) return;
+    setTopicScheduleLoading(true);
+    setTopicScheduleError('');
+    try {
+      const schedule = await getTopicSchedule(topicId);
+      setTopicSchedule(schedule || null);
+      if (schedule?.id) {
+        const data = await getSchedulerJobRuns(schedule.id);
+        setTopicScheduleRuns(data.runs || []);
+      } else {
+        setTopicScheduleRuns([]);
+      }
+    } catch (error) {
+      setTopicSchedule(null);
+      setTopicScheduleRuns([]);
+      setTopicScheduleError(error.message || '定时任务加载失败');
+    } finally {
+      setTopicScheduleLoading(false);
+    }
+  }
+
+  async function createScheduleForCurrentTopic(payload) {
+    if (!routedTopicId) return;
+    setTopicScheduleActionLoading('create');
+    setTopicScheduleError('');
+    try {
+      const schedule = await createTopicSchedule(routedTopicId, payload);
+      setTopicSchedule(schedule);
+      if (schedule?.id) {
+        const data = await getSchedulerJobRuns(schedule.id);
+        setTopicScheduleRuns(data.runs || []);
+      }
+    } catch (error) {
+      setTopicScheduleError(error.message || '定时任务创建失败');
+      throw error;
+    } finally {
+      setTopicScheduleActionLoading('');
+    }
+  }
+
+  async function pauseSchedule(jobId) {
+    setTopicScheduleActionLoading('pause');
+    setTopicScheduleError('');
+    try {
+      const schedule = await pauseSchedulerJob(jobId);
+      setTopicSchedule(schedule);
+    } catch (error) {
+      setTopicScheduleError(error.message || '定时任务暂停失败');
+    } finally {
+      setTopicScheduleActionLoading('');
+    }
+  }
+
+  async function resumeSchedule(jobId) {
+    setTopicScheduleActionLoading('resume');
+    setTopicScheduleError('');
+    try {
+      const schedule = await resumeSchedulerJob(jobId);
+      setTopicSchedule(schedule);
+    } catch (error) {
+      setTopicScheduleError(error.message || '定时任务恢复失败');
+    } finally {
+      setTopicScheduleActionLoading('');
+    }
+  }
+
+  async function runScheduleNow(jobId) {
+    setTopicScheduleActionLoading('run');
+    setTopicScheduleError('');
+    try {
+      await runSchedulerJob(jobId);
+      const data = await getSchedulerJobRuns(jobId);
+      setTopicScheduleRuns(data.runs || []);
+      if (routedTopicId) {
+        await loadTopicDetail(routedTopicId);
+      }
+    } catch (error) {
+      setTopicScheduleError(error.message || '定时任务运行失败');
+    } finally {
+      setTopicScheduleActionLoading('');
+    }
+  }
+
   function selectTopic(topic) {
     navigate(`/topics/${encodeURIComponent(topic.id)}`);
   }
@@ -195,12 +292,19 @@ function TopicPulseApp() {
   useEffect(() => {
     if (activeView !== 'topics') {
       setSelectedTopic(null);
+      setTopicSchedule(null);
+      setTopicScheduleRuns([]);
+      setTopicScheduleError('');
       return;
     }
     if (routedTopicId) {
       loadTopicDetail(routedTopicId);
+      loadTopicSchedule(routedTopicId);
     } else {
       setSelectedTopic(null);
+      setTopicSchedule(null);
+      setTopicScheduleRuns([]);
+      setTopicScheduleError('');
     }
   }, [activeView, routedTopicId]);
 
@@ -439,7 +543,17 @@ function TopicPulseApp() {
                   <TopicDetailPage
                     topic={selectedTopic}
                     loading={topicDetailLoading}
+                    schedule={topicSchedule}
+                    scheduleRuns={topicScheduleRuns}
+                    scheduleLoading={topicScheduleLoading}
+                    scheduleActionLoading={topicScheduleActionLoading}
+                    scheduleError={topicScheduleError}
                     onBack={() => navigate('/topics')}
+                    onCreateSchedule={createScheduleForCurrentTopic}
+                    onPauseSchedule={pauseSchedule}
+                    onResumeSchedule={resumeSchedule}
+                    onRunSchedule={runScheduleNow}
+                    onReloadSchedule={() => loadTopicSchedule(routedTopicId)}
                   />
                 ) : (
                   <TopicListPage

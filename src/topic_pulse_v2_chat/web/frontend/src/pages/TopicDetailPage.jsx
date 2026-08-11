@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Card, Flex, Skeleton, Tag, Typography } from 'antd';
 import { ArrowLeftOutlined, CalendarOutlined } from '@ant-design/icons';
 import MarkdownView from '../components/MarkdownView.jsx';
+import TopicSchedulePanel from '../components/TopicSchedulePanel.jsx';
 
 const { Text, Title } = Typography;
 
@@ -17,7 +18,21 @@ function formatTopicDate(value) {
   });
 }
 
-export default function TopicDetailPage({ topic, loading, onBack }) {
+export default function TopicDetailPage({
+  topic,
+  loading,
+  schedule,
+  scheduleRuns,
+  scheduleLoading,
+  scheduleActionLoading,
+  scheduleError,
+  onBack,
+  onCreateSchedule,
+  onPauseSchedule,
+  onResumeSchedule,
+  onRunSchedule,
+  onReloadSchedule,
+}) {
   return (
     <div className="topicPage topicDetailPage">
       <div className="topicDetailHero">
@@ -37,6 +52,19 @@ export default function TopicDetailPage({ topic, loading, onBack }) {
           )}
         </Flex>
       </div>
+
+      <TopicSchedulePanel
+        schedule={schedule}
+        runs={scheduleRuns}
+        loading={scheduleLoading}
+        actionLoading={scheduleActionLoading}
+        error={scheduleError}
+        onCreate={onCreateSchedule}
+        onPause={onPauseSchedule}
+        onResume={onResumeSchedule}
+        onRun={onRunSchedule}
+        onReload={onReloadSchedule}
+      />
 
       <Card className="topicDetailCard" loading={loading && !!topic}>
         {loading && !topic ? <Skeleton active paragraph={{ rows: 8 }} /> : <MarkdownView content={topic?.content || ''} />}

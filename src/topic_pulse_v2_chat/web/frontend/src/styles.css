@@ -465,6 +465,78 @@ body {
   padding: 28px;
 }
 
+.topicSchedulePanel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid #e3e7f2;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 82%);
+  box-shadow: 0 12px 34px rgb(17 24 39 / 5%);
+  padding: 16px 18px;
+}
+
+.topicScheduleHeader {
+  min-width: 0;
+}
+
+.topicScheduleHeader h3.ant-typography {
+  margin: 2px 0;
+}
+
+.topicScheduleBody {
+  display: grid;
+  gap: 14px;
+}
+
+.topicScheduleLoading {
+  min-height: 74px;
+}
+
+.topicScheduleMeta {
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) minmax(120px, 160px) minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid #eef2ff;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 12px;
+}
+
+.topicScheduleMeta > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.topicRunList {
+  display: grid;
+  gap: 8px;
+}
+
+.topicRunItem {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+}
+
+.topicRunSummary {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.scheduleModalBody {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.scheduleSelect {
+  width: 100%;
+}
+
 .markdownView {
   color: #1f2937;
   line-height: 1.78;
@@ -1321,8 +1393,17 @@ body {
     flex-direction: column;
   }
 
+  .topicScheduleHeader {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
   .topicDetailTitleRow h2.ant-typography {
     font-size: 24px;
+  }
+
+  .topicScheduleMeta {
+    grid-template-columns: 1fr;
   }
 
   .topicListCard .ant-card-body,
