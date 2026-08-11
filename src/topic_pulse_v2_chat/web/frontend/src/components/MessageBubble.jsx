@@ -4,11 +4,13 @@ import { CopyOutlined } from '@ant-design/icons';
 import MarkdownView from './MarkdownView.jsx';
 import ReferencePanel from './ReferencePanel.jsx';
 import TopicUpdatePanel from './TopicUpdatePanel.jsx';
+import { formatMessageTime } from '../utils/chat.js';
 
 const { Text, Paragraph } = Typography;
 
 export default function MessageBubble({ message, onCopy }) {
   const isUser = message.role === 'user';
+  const messageTime = formatMessageTime(message.at || message.created_at);
 
   return (
     <Flex className={`chatMessage ${isUser ? 'isUser' : 'isAssistant'} ${message.error ? 'isError' : ''}`} gap={12}>
@@ -16,6 +18,11 @@ export default function MessageBubble({ message, onCopy }) {
       <div className="messageMain">
         <Flex align="center" gap={8} className="messageMeta">
           <Text strong>{isUser ? '你' : 'Topic Pulse'}</Text>
+          {messageTime && (
+            <Text type="secondary" className="messageTime">
+              {messageTime}
+            </Text>
+          )}
           {!isUser && message.completed === false && <Tag color="warning">未完成</Tag>}
         </Flex>
         <Card size="small" className="bubbleCard">

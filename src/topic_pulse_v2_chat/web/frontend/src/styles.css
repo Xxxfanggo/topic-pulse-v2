@@ -809,6 +809,20 @@ body {
   justify-items: end;
 }
 
+.messageMeta {
+  flex-wrap: wrap;
+}
+
+.messageTime {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.isUser .messageMeta {
+  justify-content: flex-end;
+}
+
 .bubbleCard {
   border-color: #e3e7f2;
   box-shadow: 0 10px 28px rgb(17 24 39 / 6%);

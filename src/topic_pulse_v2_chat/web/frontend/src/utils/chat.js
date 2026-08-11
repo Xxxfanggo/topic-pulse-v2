@@ -24,6 +24,31 @@ export function formatSessionTime(value) {
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 }
 
+export function formatMessageTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const now = new Date();
+  const isSameYear = date.getFullYear() === now.getFullYear();
+  const isSameDay = date.toDateString() === now.toDateString();
+  const timeText = date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  if (isSameDay) {
+    return `今天 ${timeText}`;
+  }
+
+  const dateText = date.toLocaleDateString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    ...(isSameYear ? {} : { year: 'numeric' }),
+  });
+  return `${dateText} ${timeText}`;
+}
+
 export function mergeAgentStep(steps = [], step = {}) {
   const key = `${step.step_index || steps.length + 1}-${step.title || step.tool_name || ''}`;
   const nextStep = { ...step, key };
