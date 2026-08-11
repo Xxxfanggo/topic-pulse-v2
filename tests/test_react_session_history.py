@@ -4,7 +4,7 @@ import unittest
 
 from topic_pulse_v2.llm_call import LLMClient, LLMProvider, LLMRequest, LLMResponse
 from topic_pulse_v2.process import ReActAgent, ReActConfig
-from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionManager
+from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionManager, SessionStatus
 from topic_pulse_v2.tool_register import ToolRegistry
 
 
@@ -36,6 +36,11 @@ class CapturingHistoryProvider(LLMProvider):
                 ensure_ascii=False,
             )
         )
+
+
+class FailingProvider(LLMProvider):
+    def call(self, request: LLMRequest) -> LLMResponse:
+        raise RuntimeError("model unavailable")
 
 
 class ReActSessionHistoryTests(unittest.TestCase):
@@ -70,6 +75,30 @@ class ReActSessionHistoryTests(unittest.TestCase):
             self.assertEqual(history_messages[0].content, "第一轮：帮我关注内存条价格")
             self.assertIn("第1次回答", history_messages[1].content)
             self.assertEqual(history_messages[-1].content, "第二轮：刚才那个话题怎么样了")
+
+    def test_react_persists_user_input_before_llm_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            session_manager = SessionManager(
+                history_store=MarkdownSessionHistoryStore(temp_dir),
+            )
+            agent = ReActAgent(
+                llm_client=LLMClient({"fake": FailingProvider()}, default_provider="fake"),
+                tool_registry=ToolRegistry(auto_register_local_tools=False),
+                session_manager=session_manager,
+                config=ReActConfig(trace_log_path=None),
+            )
+
+            with self.assertRaises(RuntimeError):
+                agent.run(user_id="user-1", query="这轮会失败但要保留")
+
+            sessions = session_manager.list()
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0].status, SessionStatus.FAILED)
+
+            history = session_manager.get_history(sessions[0].id)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0].role, "user")
+            self.assertEqual(history[0].content, "这轮会失败但要保留")
 
 
 if __name__ == "__main__":

@@ -140,6 +140,11 @@ class ChatWebAppTests(unittest.TestCase):
                 raise AssertionError("chat fallback should not be used")
 
             def chat_stream(self, *, user_id, message, session_id=None, metadata=None):
+                yield SimpleNamespace(
+                    type="status",
+                    session_id="session-runtime-stream",
+                    data={"stage": "session_ready"},
+                )
                 yield SimpleNamespace(type="status", data={"stage": "llm_start"})
                 yield SimpleNamespace(
                     type="result",
@@ -165,6 +170,7 @@ class ChatWebAppTests(unittest.TestCase):
 
         events = [json.loads(line) for line in body.splitlines() if line.strip()]
         self.assertEqual(response.status_code, 200)
+        self.assertIn({"type": "session", "session_id": "session-runtime-stream"}, events)
         self.assertIn({"type": "delta", "content": "Runtime stre"}, events)
         self.assertEqual(events[-1]["type"], "done")
         self.assertEqual(events[-1]["session_id"], "session-runtime-stream")

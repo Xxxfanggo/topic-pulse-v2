@@ -397,6 +397,13 @@ function TopicPulseApp() {
           if (!line.trim()) continue;
           const event = JSON.parse(line);
 
+          if (event.type === 'session') {
+            setSessionId(event.session_id);
+            if (event.session_id) {
+              navigate(`/chat/${encodeURIComponent(event.session_id)}`, { replace: true });
+            }
+          }
+
           if (event.type === 'status') {
             updateAssistantMessage(() => ({ status: event.text || '' }));
             scrollConversationToBottom();
@@ -462,6 +469,7 @@ function TopicPulseApp() {
         error: true,
         status: '',
       }));
+      loadChatSessions();
     } finally {
       setLoading(false);
     }

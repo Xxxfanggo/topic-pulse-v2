@@ -681,6 +681,9 @@ def create_app(
                             break
                         if event.type == "status":
                             stage = event.data.get("stage")
+                            if stage == "session_ready":
+                                yield _stream_event("session", session_id=event.session_id or "")
+                                continue
                             if stage == "llm_start":
                                 raw_step_content = ""
                                 yield _stream_event("status", text="正在分析问题")

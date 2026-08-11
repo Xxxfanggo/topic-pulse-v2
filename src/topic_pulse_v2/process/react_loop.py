@@ -189,197 +189,202 @@ class ReActAgent:
             raise ValueError("query cannot be empty.")
 
         session_id = self._ensure_session(session_id, user_id)
+        self._save_user_input_history(session_id, query)
         if self._memory_store and self._config.save_user_input_to_memory:
             self._memory_store.save(user_id, query, metadata={"type": "user_input"})
 
-        messages = self._build_initial_messages(user_id, query, session_id)
+        try:
+            messages = self._build_initial_messages(user_id, query, session_id)
 
-        steps: list[ReActStep] = []
-        answer = ""
-        completed = False
-        tool_observations: dict[str, Any] = {}
-        tools = self._tool_registry.as_llm_tools()
+            steps: list[ReActStep] = []
+            answer = ""
+            completed = False
+            tool_observations: dict[str, Any] = {}
+            tools = self._tool_registry.as_llm_tools()
 
-        for index in range(1, self._config.max_steps + 1):
-            context = self._context_trimmer.trim(
-                ContextTrimRequest(
-                    messages=messages,
-                    tools=tools,
-                    session_id=session_id,
-                    user_id=user_id,
-                    query=query,
-                    step_index=index,
-                    metadata=metadata or {},
+            for index in range(1, self._config.max_steps + 1):
+                context = self._context_trimmer.trim(
+                    ContextTrimRequest(
+                        messages=messages,
+                        tools=tools,
+                        session_id=session_id,
+                        user_id=user_id,
+                        query=query,
+                        step_index=index,
+                        metadata=metadata or {},
+                    )
                 )
-            )
-            llm_messages = context.messages
-            log_event(
-                self._config.trace_log_path,
-                "llm_request",
-                session_id=session_id,
-                step_index=index,
-                data={
-                    "provider": provider,
-                    "model": model,
-                    "messages": [self._message_to_dict(message) for message in llm_messages],
-                    "tools": tools,
-                    "context_trim": context.metadata,
-                    "metadata": metadata or {},
-                },
-            )
-            response = self._llm_client.call(
-                llm_messages,
-                provider=provider,
-                model=model,
-                tools=tools,
-                metadata=metadata,
-            )
-            log_event(
-                self._config.trace_log_path,
-                "llm_response",
-                session_id=session_id,
-                step_index=index,
-                data={
-                    "content": response.content,
-                    "tool_calls": response.tool_calls,
-                    "usage": response.usage,
-                    "metadata": response.metadata,
-                    "model": response.model,
-                },
-            )
-            parsed = self._parse_response(response.content, response.tool_calls)
-            step_tool_calls = self._parsed_tool_calls(
-                parsed,
-                session_id,
-                index,
-                query,
-                tool_observations,
-            )
-            first_tool_call = step_tool_calls[0] if step_tool_calls else {}
-            step = ReActStep(
-                index=index,
-                thought=parsed.get("thought", ""),
-                action=first_tool_call.get("name"),
-                tool_call_id=first_tool_call.get("id"),
-                arguments=first_tool_call.get("args", {}),
-                tool_calls=step_tool_calls,
-                final_answer=parsed.get("final_answer"),
-                raw_response=response.content,
-            )
-            steps.append(step)
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=response.content,
-                    metadata={
-                        "tool_calls": self._assistant_tool_calls(
-                            step.tool_calls,
-                        )
+                llm_messages = context.messages
+                log_event(
+                    self._config.trace_log_path,
+                    "llm_request",
+                    session_id=session_id,
+                    step_index=index,
+                    data={
+                        "provider": provider,
+                        "model": model,
+                        "messages": [self._message_to_dict(message) for message in llm_messages],
+                        "tools": tools,
+                        "context_trim": context.metadata,
+                        "metadata": metadata or {},
                     },
                 )
-            )
+                response = self._llm_client.call(
+                    llm_messages,
+                    provider=provider,
+                    model=model,
+                    tools=tools,
+                    metadata=metadata,
+                )
+                log_event(
+                    self._config.trace_log_path,
+                    "llm_response",
+                    session_id=session_id,
+                    step_index=index,
+                    data={
+                        "content": response.content,
+                        "tool_calls": response.tool_calls,
+                        "usage": response.usage,
+                        "metadata": response.metadata,
+                        "model": response.model,
+                    },
+                )
+                parsed = self._parse_response(response.content, response.tool_calls)
+                step_tool_calls = self._parsed_tool_calls(
+                    parsed,
+                    session_id,
+                    index,
+                    query,
+                    tool_observations,
+                )
+                first_tool_call = step_tool_calls[0] if step_tool_calls else {}
+                step = ReActStep(
+                    index=index,
+                    thought=parsed.get("thought", ""),
+                    action=first_tool_call.get("name"),
+                    tool_call_id=first_tool_call.get("id"),
+                    arguments=first_tool_call.get("args", {}),
+                    tool_calls=step_tool_calls,
+                    final_answer=parsed.get("final_answer"),
+                    raw_response=response.content,
+                )
+                steps.append(step)
+                messages.append(
+                    Message(
+                        role="assistant",
+                        content=response.content,
+                        metadata={
+                            "tool_calls": self._assistant_tool_calls(
+                                step.tool_calls,
+                            )
+                        },
+                    )
+                )
 
-            if step.final_answer is not None:
-                answer = step.final_answer
+                if step.final_answer is not None:
+                    answer = step.final_answer
+                    completed = True
+                    break
+
+                if step.tool_calls:
+                    for tool_call in step.tool_calls:
+                        tool_request = ToolCallRequest(
+                            name=tool_call["name"],
+                            arguments=tool_call.get("args", {}),
+                            call_id=tool_call.get("id"),
+                        )
+                        log_event(
+                            self._config.trace_log_path,
+                            "tool_request",
+                            session_id=session_id,
+                            step_index=index,
+                            data={
+                                "name": tool_request.name,
+                                "arguments": tool_request.arguments,
+                                "call_id": tool_request.call_id,
+                                "metadata": tool_request.metadata,
+                            },
+                        )
+                        tool_result = self._tool_executor.call_request(tool_request)
+                        log_event(
+                            self._config.trace_log_path,
+                            "tool_response",
+                            session_id=session_id,
+                            step_index=index,
+                            data={
+                                "name": tool_result.name,
+                                "success": tool_result.success,
+                                "result": tool_result.result,
+                                "error": tool_result.error,
+                                "call_id": tool_result.call_id,
+                                "elapsed_ms": tool_result.elapsed_ms,
+                                "metadata": tool_result.metadata,
+                            },
+                        )
+                        step.tool_results.append(tool_result)
+                        if step.tool_result is None:
+                            step.tool_result = tool_result
+                        if tool_result.success:
+                            self._remember_tool_observation(tool_observations, tool_result)
+                        messages.append(
+                            Message(
+                                role="tool",
+                                name=tool_result.name,
+                                tool_call_id=tool_result.call_id,
+                                content=self._format_observation(tool_result),
+                            )
+                        )
+                    step.observation = [
+                        result.result if result.success else result.error
+                        for result in step.tool_results
+                    ]
+                    if len(step.observation) == 1:
+                        step.observation = step.observation[0]
+                    continue
+
+                answer = response.content
                 completed = True
                 break
 
-            if step.tool_calls:
-                for tool_call in step.tool_calls:
-                    tool_request = ToolCallRequest(
-                        name=tool_call["name"],
-                        arguments=tool_call.get("args", {}),
-                        call_id=tool_call.get("id"),
-                    )
-                    log_event(
-                        self._config.trace_log_path,
-                        "tool_request",
-                        session_id=session_id,
-                        step_index=index,
-                        data={
-                            "name": tool_request.name,
-                            "arguments": tool_request.arguments,
-                            "call_id": tool_request.call_id,
-                            "metadata": tool_request.metadata,
-                        },
-                    )
-                    tool_result = self._tool_executor.call_request(tool_request)
-                    log_event(
-                        self._config.trace_log_path,
-                        "tool_response",
-                        session_id=session_id,
-                        step_index=index,
-                        data={
-                            "name": tool_result.name,
-                            "success": tool_result.success,
-                            "result": tool_result.result,
-                            "error": tool_result.error,
-                            "call_id": tool_result.call_id,
-                            "elapsed_ms": tool_result.elapsed_ms,
-                            "metadata": tool_result.metadata,
-                        },
-                    )
-                    step.tool_results.append(tool_result)
-                    if step.tool_result is None:
-                        step.tool_result = tool_result
-                    if tool_result.success:
-                        self._remember_tool_observation(tool_observations, tool_result)
-                    messages.append(
-                        Message(
-                            role="tool",
-                            name=tool_result.name,
-                            tool_call_id=tool_result.call_id,
-                            content=self._format_observation(tool_result),
-                        )
-                    )
-                step.observation = [
-                    result.result if result.success else result.error
-                    for result in step.tool_results
-                ]
-                if len(step.observation) == 1:
-                    step.observation = step.observation[0]
-                continue
+            if not completed:
+                answer = "智能体已停止，因为达到了最大执行步数。"
 
-            answer = response.content
-            completed = True
-            break
+            answer = self._augment_answer_with_search_references(
+                answer,
+                query,
+                tool_observations.get("doubao_search"),
+            )
+            answer = self._augment_answer_with_topic_update(
+                answer,
+                tool_observations.get("topic_markdown_store"),
+            )
 
-        if not completed:
-            answer = "智能体已停止，因为达到了最大执行步数。"
+            if self._memory_store and self._config.save_final_answer_to_memory:
+                self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
+            self._save_assistant_history(session_id, answer, completed)
+            self._finish_session(session_id, completed)
+            log_event(
+                self._config.trace_log_path,
+                "agent_finish",
+                session_id=session_id,
+                step_index=None,
+                data={
+                    "answer": answer,
+                    "completed": completed,
+                    "max_steps": self._config.max_steps,
+                },
+            )
 
-        answer = self._augment_answer_with_search_references(
-            answer,
-            query,
-            tool_observations.get("doubao_search"),
-        )
-        answer = self._augment_answer_with_topic_update(
-            answer,
-            tool_observations.get("topic_markdown_store"),
-        )
-
-        if self._memory_store and self._config.save_final_answer_to_memory:
-            self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
-        self._save_session_history(session_id, query, answer, completed)
-        self._finish_session(session_id, completed)
-        log_event(
-            self._config.trace_log_path,
-            "agent_finish",
-            session_id=session_id,
-            step_index=None,
-            data={
-                "answer": answer,
-                "completed": completed,
-                "max_steps": self._config.max_steps,
-            },
-        )
-
-        return ReActResult(
-            answer=answer,
-            session_id=session_id,
-            steps=steps,
-            completed=completed,
-            metadata={"max_steps": self._config.max_steps},
-        )
+            return ReActResult(
+                answer=answer,
+                session_id=session_id,
+                steps=steps,
+                completed=completed,
+                metadata={"max_steps": self._config.max_steps},
+            )
+        except Exception:
+            self._finish_session(session_id, False)
+            raise
 
     def stream(
         self,
@@ -397,6 +402,7 @@ class ReActAgent:
             raise ValueError("query cannot be empty.")
 
         session_id = self._ensure_session(session_id, user_id)
+        self._save_user_input_history(session_id, query)
         yield ReActStreamEvent(type="status", session_id=session_id, data={"stage": "session_ready"})
 
         if self._memory_store and self._config.save_user_input_to_memory:
@@ -650,7 +656,7 @@ class ReActAgent:
         )
         if self._memory_store and self._config.save_final_answer_to_memory:
             self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
-        self._save_session_history(session_id, query, answer, completed)
+        self._save_assistant_history(session_id, answer, completed)
         self._finish_session(session_id, completed)
         log_event(
             self._config.trace_log_path,
@@ -715,6 +721,11 @@ class ReActAgent:
         session_text = self._format_session(session_id)
         local_topic_text = self._format_local_topic_candidates(query)
         history_messages = self._session_history_messages(session_id)
+        current_turn_in_history = (
+            bool(history_messages)
+            and history_messages[-1].role == "user"
+            and history_messages[-1].content == query
+        )
         current_time = datetime.now().isoformat(timespec="seconds")
 
         return [
@@ -730,7 +741,7 @@ class ReActAgent:
                 ),
             ),
             *history_messages,
-            Message(role="user", content=query),
+            *([] if current_turn_in_history else [Message(role="user", content=query)]),
         ]
 
     def _session_history_messages(self, session_id: str | None) -> list[Message]:
@@ -749,12 +760,10 @@ class ReActAgent:
             messages.append(Message(role=item.role, content=item.content))
         return messages
 
-    def _save_session_history(
+    def _save_user_input_history(
         self,
         session_id: str | None,
         query: str,
-        answer: str,
-        completed: bool,
     ) -> None:
         if not self._session_manager or not session_id:
             return
@@ -764,6 +773,15 @@ class ReActAgent:
             query,
             metadata={"type": "user_input"},
         )
+
+    def _save_assistant_history(
+        self,
+        session_id: str | None,
+        answer: str,
+        completed: bool,
+    ) -> None:
+        if not self._session_manager or not session_id:
+            return
         self._session_manager.append_history(
             session_id,
             "assistant",
