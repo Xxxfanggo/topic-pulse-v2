@@ -7,8 +7,8 @@ from topic_pulse_v2.db import SQLiteDatabase
 
 class SQLiteDatabaseTests(unittest.TestCase):
     def test_execute_and_fetch_rows(self):
-
-            database = SQLiteDatabase()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = SQLiteDatabase(Path(temp_dir) / "topic_pulse.sqlite3")
             try:
                 database.initialize()
                 database.execute("CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
@@ -25,7 +25,7 @@ class SQLiteDatabaseTests(unittest.TestCase):
 
     def test_transaction_rolls_back_on_error(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            database = SQLiteDatabase(Path(temp_dir) / "app.sqlite3")
+            database = SQLiteDatabase(Path(temp_dir) / "topic_pulse.sqlite3")
             try:
                 database.initialize()
                 database.execute("CREATE TABLE items (id TEXT PRIMARY KEY)")
