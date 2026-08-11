@@ -21,7 +21,7 @@ class SchedulerService:
         *,
         store: SchedulerStore,
         registry: ScheduledTaskRegistry,
-        timezone: str = "Asia/Hong_Kong",
+        timezone: str = "Asia/Shanghai",
         enabled: bool = True,
     ) -> None:
         self._store = store
