@@ -43,6 +43,9 @@ Topic Pulse V2 不是一个一次性搜索脚本，也不是一个普通聊天�
 <p align="center">
   <img src="README/web交互介绍图-3.png" alt="Topic Pulse Memory Detail" width="92%">
 </p>
+<p align="center">
+  <img src="README/web交互介绍图-4.png" alt="Topic Pulse Memory Detail" width="92%">
+</p>
 
 ## ✨ Highlights
 
