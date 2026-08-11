@@ -1,0 +1,44 @@
+# Python caches and build outputs
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+/build/
+/dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node / Vite frontend artifacts
+node_modules/
+src/topic_pulse_v2_chat/web/frontend/dist/
+src/topic_pulse_v2_chat/web/frontend/node_modules/
+src/topic_pulse_v2_chat/web/frontend/.vite/
+src/topic_pulse_v2_chat/web/frontend/node_modules/.vite/
+
+# Runtime logs and generated local data
+/logs/
+*.log
+src/topic_pulse_v2/session/data/
+!src/topic_pulse_v2/session/data/.gitkeep
+
+# Local topic data generated while running the app
+/data/
+
+# IDE and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+.env.*
+!.env.example
