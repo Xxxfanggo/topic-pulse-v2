@@ -6,6 +6,8 @@ import json
 import logging
 import re
 import asyncio
+import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -16,6 +18,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from topic_pulse_v2.scheduler import SchedulerService, ScheduledTaskRegistry, SQLiteSchedulerStore
+from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage
 from topic_pulse_v2_chat.web.schemas import (
     ChatRequest,
@@ -46,6 +50,14 @@ class ChatRuntime(Protocol):
         session_id: str | None = None,
         metadata: dict | None = None,
     ):
+        ...
+
+
+class SchedulerRuntime(Protocol):
+    def start(self) -> None:
+        ...
+
+    def shutdown(self, *, wait: bool = False) -> None:
         ...
 
 
@@ -433,6 +445,18 @@ def _session_store() -> MarkdownSessionHistoryStore:
     return MarkdownSessionHistoryStore(SESSION_DATA_DIR)
 
 
+
+def _create_scheduler_service() -> SchedulerService:
+    registry = ScheduledTaskRegistry()
+    register_builtin_tasks(registry)
+    return SchedulerService(
+        store=SQLiteSchedulerStore(),
+        registry=registry,
+        timezone="Asia/Shanghai",
+        enabled=True,
+    )
+
+
 def _session_title(messages: list[SessionMessage], fallback: str) -> str:
     for message in messages:
         if message.role != "user":
@@ -492,11 +516,24 @@ def _session_summary(path: Path, store: MarkdownSessionHistoryStore) -> SessionS
     )
 
 
-def create_app(chat_runtime: ChatRuntime | None = None) -> FastAPI:
+def create_app(
+    chat_runtime: ChatRuntime | None = None,
+    scheduler_service: SchedulerRuntime | None = None,
+) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.scheduler_service = scheduler_service or _create_scheduler_service()
+        app.state.scheduler_service.start()
+        try:
+            yield
+        finally:
+            app.state.scheduler_service.shutdown(wait=False)
+
     app = FastAPI(
         title="Topic Pulse Chat",
         description="Browser chat interface for Topic Pulse V2.",
         version="0.1.0",
+        lifespan=lifespan,
     )
     app.state.chat_runtime = chat_runtime or ReactChatService()
     app.add_middleware(
