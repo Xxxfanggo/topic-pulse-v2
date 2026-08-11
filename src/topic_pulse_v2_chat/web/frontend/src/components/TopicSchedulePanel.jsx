@@ -7,6 +7,7 @@ import {
   ReloadOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
+import MarkdownView from './MarkdownView.jsx';
 
 const { Text, Title } = Typography;
 
@@ -59,10 +60,10 @@ function parseRunSummary(value) {
   try {
     const payload = JSON.parse(value);
     const parts = [];
-    if (payload.topic_name) parts.push(payload.topic_name);
+    if (payload.topic_name) parts.push(`**${payload.topic_name}**`);
     if (Number.isFinite(Number(payload.new_count))) parts.push(`新增 ${payload.new_count} 条`);
     if (payload.summary) parts.push(payload.summary);
-    return parts.join(' · ') || value;
+    return parts.join('\n\n') || value;
   } catch {
     return value;
   }
@@ -174,7 +175,14 @@ export default function TopicSchedulePanel({
                         <Text type="secondary">{formatDateTime(run.started_at)}</Text>
                         {run.duration_ms != null && <Text type="secondary">{Math.round(run.duration_ms)} ms</Text>}
                       </Flex>
-                      <Text className="topicRunSummary">{run.error || parseRunSummary(run.result_summary) || '暂无摘要'}</Text>
+                      {run.error ? (
+                        <Text className="topicRunSummary">{run.error}</Text>
+                      ) : (
+                        <MarkdownView
+                          content={parseRunSummary(run.result_summary) || '暂无摘要'}
+                          className="topicRunMarkdown"
+                        />
+                      )}
                     </div>
                   </List.Item>
                 )}

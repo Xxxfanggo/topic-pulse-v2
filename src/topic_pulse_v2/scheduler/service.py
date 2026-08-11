@@ -13,6 +13,8 @@ from .models import JobRun, ScheduledJob
 from .registry import ScheduledTaskRegistry
 from .store import SchedulerStore
 
+SUMMARY_FIELD_LIMIT = 500
+
 
 class SchedulerService:
     """Application-owned scheduler facade backed by APScheduler."""
@@ -152,9 +154,26 @@ class SchedulerService:
         if result is None:
             return ""
         if isinstance(result, (dict, list)):
-            text = json.dumps(result, ensure_ascii=False, default=str)
-        else:
-            text = str(result)
-        if len(text) > 500:
-            return f"{text[:497]}..."
-        return text
+            return json.dumps(
+                _truncate_summary_fields(result),
+                ensure_ascii=False,
+                default=str,
+            )
+        return str(result)
+
+
+def _truncate_summary_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _truncate_text(item) if key == "summary" and isinstance(item, str) else _truncate_summary_fields(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_truncate_summary_fields(item) for item in value]
+    return value
+
+
+def _truncate_text(value: str, limit: int = SUMMARY_FIELD_LIMIT) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[: max(0, limit - 3)]}..."

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -118,6 +119,41 @@ class SchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(chat_runtime.calls[0]["metadata"]["source"], "scheduler")
                 self.assertEqual(chat_runtime.calls[0]["metadata"]["task"], "refresh_topic")
                 self.assertIn("Memory Prices", chat_runtime.calls[0]["message"])
+            finally:
+                store.close()
+
+    async def test_result_summary_keeps_valid_json_when_summary_is_truncated(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ScheduledTaskRegistry()
+            registry.register(
+                "long_summary",
+                lambda: {
+                    "status": "completed",
+                    "topic_name": "Memory Prices",
+                    "new_count": 1,
+                    "summary": "x" * 800,
+                },
+            )
+            store = SQLiteSchedulerStore(path=Path(temp_dir) / "topic_pulse.sqlite3")
+            try:
+                store.initialize()
+                store.save_job(
+                    ScheduledJob(
+                        id="job-long-summary",
+                        task_name="long_summary",
+                        trigger="interval",
+                        trigger_args={"minutes": 5},
+                    )
+                )
+                service = SchedulerService(store=store, registry=registry, enabled=False)
+
+                run = await service.run_job_now("job-long-summary")
+                payload = json.loads(run.result_summary)
+
+                self.assertEqual(payload["status"], "completed")
+                self.assertEqual(payload["new_count"], 1)
+                self.assertEqual(len(payload["summary"]), 500)
+                self.assertTrue(payload["summary"].endswith("..."))
             finally:
                 store.close()
 

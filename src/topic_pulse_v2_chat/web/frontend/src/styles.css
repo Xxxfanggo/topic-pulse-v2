@@ -527,6 +527,40 @@ body {
   overflow-wrap: anywhere;
 }
 
+.topicRunMarkdown {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.topicRunMarkdown h1,
+.topicRunMarkdown h2,
+.topicRunMarkdown h3,
+.topicRunMarkdown p {
+  margin: 0;
+}
+
+.topicRunMarkdown h1,
+.topicRunMarkdown h2,
+.topicRunMarkdown h3 {
+  margin-top: 8px;
+  margin-bottom: 5px;
+  border-bottom: 0;
+  color: #334155;
+  font-size: 14px;
+  padding-bottom: 0;
+}
+
+.topicRunMarkdown ul,
+.topicRunMarkdown ol {
+  margin: 5px 0;
+  padding-left: 18px;
+}
+
+.topicRunMarkdown li {
+  margin: 3px 0;
+}
+
 .scheduleModalBody {
   display: grid;
   gap: 8px;
