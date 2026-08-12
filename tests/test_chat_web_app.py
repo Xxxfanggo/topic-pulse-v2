@@ -541,6 +541,51 @@ class ChatWebAppTests(unittest.TestCase):
             finally:
                 web_app.SESSION_DATA_DIR = original_session_data_dir
 
+    def test_sessions_api_hides_scheduler_sessions(self):
+        with TemporaryDirectory() as temp_dir:
+            sessions_dir = Path(temp_dir)
+            visible_path = sessions_dir / "session-visible.md"
+            visible_path.write_text(
+                "# Session session-visible\n\n"
+                "## Messages\n\n"
+                "<!-- message\n"
+                '{"role": "user", "created_at": "2026-08-05T10:00:00+00:00", "metadata": {"type": "user_input"}}\n'
+                "-->\n"
+                "hello\n"
+                "<!-- /message -->\n\n",
+                encoding="utf-8",
+            )
+            hidden_path = sessions_dir / "session-scheduler.md"
+            hidden_path.write_text(
+                "# Session session-scheduler\n\n"
+                "## Messages\n\n"
+                "<!-- message\n"
+                '{"role": "user", "created_at": "2026-08-05T11:00:00+00:00", "metadata": {"type": "user_input", "source": "scheduler", "visibility": "hidden"}}\n'
+                "-->\n"
+                "refresh topic\n"
+                "<!-- /message -->\n\n",
+                encoding="utf-8",
+            )
+
+            web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
+
+            original_session_data_dir = web_app.SESSION_DATA_DIR
+            web_app.SESSION_DATA_DIR = sessions_dir
+            try:
+                client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
+
+                sessions = client.get("/api/sessions")
+                hidden_detail = client.get("/api/sessions/session-scheduler")
+
+                self.assertEqual(sessions.status_code, 200)
+                self.assertEqual(
+                    [session["id"] for session in sessions.json()["sessions"]],
+                    ["session-visible"],
+                )
+                self.assertEqual(hidden_detail.status_code, 404)
+            finally:
+                web_app.SESSION_DATA_DIR = original_session_data_dir
+
 
 if __name__ == "__main__":
     unittest.main()

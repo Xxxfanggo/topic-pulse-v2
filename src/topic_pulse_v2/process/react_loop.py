@@ -189,7 +189,7 @@ class ReActAgent:
             raise ValueError("query cannot be empty.")
 
         session_id = self._ensure_session(session_id, user_id)
-        self._save_user_input_history(session_id, query)
+        self._save_user_input_history(session_id, query, request_metadata=metadata)
         if self._memory_store and self._config.save_user_input_to_memory:
             self._memory_store.save(user_id, query, metadata={"type": "user_input"})
 
@@ -402,7 +402,7 @@ class ReActAgent:
             raise ValueError("query cannot be empty.")
 
         session_id = self._ensure_session(session_id, user_id)
-        self._save_user_input_history(session_id, query)
+        self._save_user_input_history(session_id, query, request_metadata=metadata)
         yield ReActStreamEvent(type="status", session_id=session_id, data={"stage": "session_ready"})
 
         if self._memory_store and self._config.save_user_input_to_memory:
@@ -764,14 +764,17 @@ class ReActAgent:
         self,
         session_id: str | None,
         query: str,
+        *,
+        request_metadata: dict[str, Any] | None = None,
     ) -> None:
         if not self._session_manager or not session_id:
             return
+        metadata = {"type": "user_input", **self._session_history_metadata(request_metadata)}
         self._session_manager.append_history(
             session_id,
             "user",
             query,
-            metadata={"type": "user_input"},
+            metadata=metadata,
         )
 
     def _save_assistant_history(
@@ -788,6 +791,21 @@ class ReActAgent:
             answer,
             metadata={"type": "final_answer", "completed": completed},
         )
+
+    @staticmethod
+    def _session_history_metadata(request_metadata: dict[str, Any] | None) -> dict[str, Any]:
+        if not request_metadata:
+            return {}
+        metadata: dict[str, Any] = {}
+        source = request_metadata.get("source")
+        if source:
+            metadata["source"] = source
+        task = request_metadata.get("task")
+        if task:
+            metadata["task"] = task
+        if source == "scheduler":
+            metadata["visibility"] = "hidden"
+        return metadata
 
     @staticmethod
     def _format_prompt_for_debug(messages: list[Message]) -> str:

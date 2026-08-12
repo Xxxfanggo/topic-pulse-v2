@@ -581,6 +581,14 @@ def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage
     return formatted
 
 
+def _is_hidden_session(messages: list[SessionMessage]) -> bool:
+    for message in messages:
+        metadata = message.metadata or {}
+        if metadata.get("visibility") == "hidden" or metadata.get("source") == "scheduler":
+            return True
+    return False
+
+
 def _session_summary(path: Path, store: MarkdownSessionHistoryStore) -> SessionSummary:
     messages = store.list(path.stem)
     stat = path.stat()
@@ -914,10 +922,12 @@ def create_app(
             for path in SESSION_DATA_DIR.glob("*.md")
             if path.is_file() and not path.name.startswith(".")
         ]
-        sessions = [
-            _session_summary(path, store)
-            for path in sorted(paths, key=lambda item: item.stat().st_mtime, reverse=True)
-        ]
+        sessions = []
+        for path in sorted(paths, key=lambda item: item.stat().st_mtime, reverse=True):
+            messages = store.list(path.stem)
+            if _is_hidden_session(messages):
+                continue
+            sessions.append(_session_summary(path, store))
         return SessionListResponse(sessions=sessions)
 
     @app.get("/api/sessions/{session_id}", response_model=SessionDetailResponse)
@@ -926,10 +936,13 @@ def create_app(
         path = store.path_for(session_id)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
+        messages = store.list(session_id)
+        if _is_hidden_session(messages):
+            raise HTTPException(status_code=404, detail="Session not found")
         summary = _session_summary(path, store)
         return SessionDetailResponse(
             **_model_data(summary),
-            messages=_session_messages(store.list(session_id)),
+            messages=_session_messages(messages),
         )
 
     if FRONTEND_DIST_DIR.exists():

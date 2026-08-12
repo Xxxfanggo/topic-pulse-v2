@@ -100,6 +100,29 @@ class ReActSessionHistoryTests(unittest.TestCase):
             self.assertEqual(history[0].role, "user")
             self.assertEqual(history[0].content, "这轮会失败但要保留")
 
+    def test_scheduler_turn_marks_session_history_hidden(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            session_manager = SessionManager(
+                history_store=MarkdownSessionHistoryStore(temp_dir),
+            )
+            agent = ReActAgent(
+                llm_client=LLMClient({"fake": CapturingHistoryProvider()}, default_provider="fake"),
+                tool_registry=ToolRegistry(auto_register_local_tools=False),
+                session_manager=session_manager,
+                config=ReActConfig(trace_log_path=None),
+            )
+
+            result = agent.run(
+                user_id="scheduler",
+                query="刷新话题",
+                metadata={"source": "scheduler", "task": "refresh_topic"},
+            )
+
+            history = session_manager.get_history(result.session_id)
+            self.assertEqual(history[0].metadata["source"], "scheduler")
+            self.assertEqual(history[0].metadata["task"], "refresh_topic")
+            self.assertEqual(history[0].metadata["visibility"], "hidden")
+
 
 if __name__ == "__main__":
     unittest.main()
