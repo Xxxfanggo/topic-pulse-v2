@@ -5,6 +5,7 @@ from pathlib import Path
 
 from topic_pulse_v2.llm_call import LLMClient, LLMProvider, LLMRequest, LLMResponse
 from topic_pulse_v2.process import ReActAgent, ReActConfig
+from topic_pulse_v2.trace import resolve_trace_log_path
 from topic_pulse_v2.tool_register import ToolRegistry
 
 
@@ -66,12 +67,10 @@ class ReActMultiToolCallsTests(unittest.TestCase):
 
             events = [
                 json.loads(line)
-                for line in trace_path.read_text(encoding="utf-8").splitlines()
+                for line in resolve_trace_log_path(str(trace_path)).read_text(encoding="utf-8").splitlines()
             ]
             tool_requests = [event for event in events if event["type"] == "tool_request"]
             tool_responses = [event for event in events if event["type"] == "tool_response"]
-            chronological_tool_requests = list(reversed(tool_requests))
-            chronological_tool_responses = list(reversed(tool_responses))
             tool_messages = [
                 message
                 for message in provider.second_request_messages
@@ -81,11 +80,11 @@ class ReActMultiToolCallsTests(unittest.TestCase):
             self.assertTrue(result.completed)
             self.assertEqual(calls, [("first_tool", "第一个"), ("second_tool", "第二个")])
             self.assertEqual(
-                [event["data"]["name"] for event in chronological_tool_requests],
+                [event["data"]["name"] for event in tool_requests],
                 ["first_tool", "second_tool"],
             )
             self.assertEqual(
-                [event["data"]["name"] for event in chronological_tool_responses],
+                [event["data"]["name"] for event in tool_responses],
                 ["first_tool", "second_tool"],
             )
             self.assertEqual([message.tool_call_id for message in tool_messages], ["call-1", "call-2"])

@@ -8,6 +8,21 @@ from pathlib import Path
 from typing import Any
 
 
+def resolve_trace_log_path(log_path: str | None, *, timestamp: datetime | None = None) -> Path | None:
+    """Resolve a configured trace path to the date-partitioned JSONL file."""
+
+    if not log_path:
+        return None
+    base_path = Path(log_path)
+    current = timestamp or datetime.now()
+    partition_name = f"{current.date().isoformat()}.jsonl"
+    if base_path.suffix:
+        partition_dir = base_path.parent / base_path.stem
+    else:
+        partition_dir = base_path
+    return partition_dir / partition_name
+
+
 def log_event(
     log_path: str | None,
     event_type: str,
@@ -20,15 +35,18 @@ def log_event(
 
     if not log_path:
         return
-    path = Path(log_path)
+    timestamp = datetime.now()
+    path = resolve_trace_log_path(log_path, timestamp=timestamp)
+    if path is None:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     event = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "timestamp": timestamp.isoformat(timespec="seconds"),
         "type": event_type,
         "session_id": session_id,
         "step_index": step_index,
         "data": data or {},
     }
     line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
-    existing_content = path.read_text(encoding="utf-8") if path.exists() else ""
-    path.write_text(line + existing_content, encoding="utf-8")
+    with path.open("a", encoding="utf-8", newline="\n") as file:
+        file.write(line)

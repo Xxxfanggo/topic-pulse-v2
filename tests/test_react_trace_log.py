@@ -5,6 +5,7 @@ from pathlib import Path
 
 from topic_pulse_v2.llm_call import LLMClient, LLMProvider, LLMRequest, LLMResponse
 from topic_pulse_v2.process import ReActAgent, ReActConfig
+from topic_pulse_v2.trace import resolve_trace_log_path
 from topic_pulse_v2.tool_register import ToolRegistry
 
 
@@ -77,7 +78,7 @@ class ReActTraceLogTests(unittest.TestCase):
 
             events = [
                 json.loads(line)
-                for line in trace_path.read_text(encoding="utf-8").splitlines()
+                for line in resolve_trace_log_path(str(trace_path)).read_text(encoding="utf-8").splitlines()
             ]
             event_types = [event["type"] for event in events]
 
