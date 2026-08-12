@@ -151,7 +151,7 @@ body {
   content: "";
   position: fixed;
   left: 280px;
-  right: 320px;
+  right: 0;
   bottom: 132px;
   height: 48px;
   pointer-events: none;
@@ -1287,9 +1287,9 @@ body {
 
 .composerCard {
   position: fixed;
-  left: calc(280px + (100vw - 280px - 320px) / 2);
+  left: calc(280px + (100vw - 280px) / 2);
   bottom: 22px;
-  width: min(840px, calc(100vw - 280px - 320px - 72px));
+  width: min(880px, calc(100vw - 280px - 56px));
   transform: translateX(-50%);
   border-color: rgb(223 227 244 / 82%);
   border-top-color: rgb(255 255 255 / 76%);
@@ -1304,8 +1304,8 @@ body {
 }
 
 .ant-layout-sider-collapsed ~ .workspace .composerCard {
-  left: calc((100vw - 320px) / 2);
-  width: min(880px, calc(100vw - 320px - 72px));
+  left: 50%;
+  width: min(880px, calc(100vw - 56px));
 }
 
 .composerCard .ant-card-body {
