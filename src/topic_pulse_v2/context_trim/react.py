@@ -12,10 +12,10 @@ from topic_pulse_v2.session import SessionMessage
 class ReActContextBudget:
     """Budget settings used before ReAct initial prompt assembly."""
 
-    system_prompt_token_budget: int = 1_000_000
-    memory_token_budget: int = 1_000_000
-    context_extra_token_budget: int = 10_000_000
-    session_history_token_budget: int = 8_000_000
+    system_prompt_token_budget: int = 10000
+    memory_token_budget: int = 10000
+    context_extra_token_budget: int = 50000
+    session_history_token_budget: int = 80000
     session_history_recent_turns_on_over_budget: int = 5
 
 
