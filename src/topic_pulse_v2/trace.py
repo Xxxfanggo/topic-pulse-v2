@@ -1,4 +1,4 @@
-"""Simple JSONL trace logging."""
+"""Simple JSON-lines trace logging."""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from typing import Any
 
 
 def resolve_trace_log_path(log_path: str | None, *, timestamp: datetime | None = None) -> Path | None:
-    """Resolve a configured trace path to the date-partitioned JSONL file."""
+    """Resolve a configured trace path to the date-partitioned log file."""
 
     if not log_path:
         return None
     base_path = Path(log_path)
     current = timestamp or datetime.now()
-    partition_name = f"{current.date().isoformat()}.jsonl"
+    partition_name = f"{current.date().isoformat()}.log"
     if base_path.suffix:
         partition_dir = base_path.parent / base_path.stem
     else:
@@ -31,7 +31,7 @@ def log_event(
     step_index: int | None = None,
     data: dict[str, Any] | None = None,
 ) -> None:
-    """Append one trace event to a JSONL log file."""
+    """Write one trace event to the daily log file, newest first."""
 
     if not log_path:
         return
@@ -48,5 +48,5 @@ def log_event(
         "data": data or {},
     }
     line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
-    with path.open("a", encoding="utf-8", newline="\n") as file:
-        file.write(line)
+    existing_content = path.read_text(encoding="utf-8") if path.exists() else ""
+    path.write_text(line + existing_content, encoding="utf-8", newline="\n")

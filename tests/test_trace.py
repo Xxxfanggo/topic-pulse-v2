@@ -7,7 +7,7 @@ from topic_pulse_v2.trace import log_event, resolve_trace_log_path
 
 
 class TraceTests(unittest.TestCase):
-    def test_log_event_writes_jsonl(self):
+    def test_log_event_writes_daily_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "trace.jsonl"
 
@@ -27,9 +27,9 @@ class TraceTests(unittest.TestCase):
             self.assertEqual(event["step_index"], 1)
             self.assertEqual(event["data"]["arguments"], {"value": "测试"})
             self.assertEqual(partition_path.parent.name, "trace")
-            self.assertEqual(partition_path.suffix, ".jsonl")
+            self.assertEqual(partition_path.suffix, ".log")
 
-    def test_log_event_appends_events_to_daily_partition(self):
+    def test_log_event_writes_newest_event_first_in_daily_partition(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "trace.jsonl"
 
@@ -42,7 +42,7 @@ class TraceTests(unittest.TestCase):
                 for line in partition_path.read_text(encoding="utf-8").splitlines()
             ]
 
-            self.assertEqual([event["type"] for event in events], ["first", "second"])
+            self.assertEqual([event["type"] for event in events], ["second", "first"])
             self.assertTrue(all(event["timestamp"] for event in events))
             self.assertFalse(path.exists())
 

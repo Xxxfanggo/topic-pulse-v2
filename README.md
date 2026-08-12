@@ -227,7 +227,7 @@ src/topic_pulse_v2/session/data/
 默认 trace 文件：
 
 ```text
-logs/react_trace/YYYY-MM-DD.jsonl
+logs/react_trace/YYYY-MM-DD.log
 ```
 
 你可以用它观察：
@@ -322,7 +322,7 @@ src/topic_pulse_v2_chat/
   web/                   # FastAPI backend and React frontend
 
 data/topics/             # long-term topic markdown memory
-logs/react_trace/YYYY-MM-DD.jsonl   # date-partitioned runtime trace log
+logs/react_trace/YYYY-MM-DD.log   # date-partitioned runtime trace log
 tests/                   # unit and flow tests
 test_case/               # functional spec and agent test cases
 README/                  # README screenshots and architecture images
