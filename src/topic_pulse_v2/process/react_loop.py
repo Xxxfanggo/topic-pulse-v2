@@ -22,6 +22,8 @@ from topic_pulse_v2.context_trim import (
     ContextTrimRequest,
     ContextTrimmer,
     PassthroughContextTrimmer,
+    ReActContextBudget,
+    ReActContextManager,
 )
 from topic_pulse_v2.trace import log_event, log_markdown
 from topic_pulse_v2.llm_call import LLMClient, Message
@@ -38,6 +40,11 @@ class ReActConfig:
     max_steps: int = 6
     memory_limit: int = 5
     session_history_limit: int = 12
+    system_prompt_token_budget: int = 10000
+    memory_token_budget: int = 10000
+    context_extra_token_budget: int = 50000
+    session_history_token_budget: int = 80000
+    session_history_recent_turns_on_over_budget: int = 5
     save_user_input_to_memory: bool = False
     save_final_answer_to_memory: bool = False
     trace_log_path: str | None = "logs/react_trace.jsonl"
@@ -172,6 +179,17 @@ class ReActAgent:
         self._session_manager = session_manager
         self._context_trimmer = context_trimmer or PassthroughContextTrimmer()
         self._config = config or ReActConfig()
+        self._react_context = ReActContextManager(
+            ReActContextBudget(
+                system_prompt_token_budget=self._config.system_prompt_token_budget,
+                memory_token_budget=self._config.memory_token_budget,
+                context_extra_token_budget=self._config.context_extra_token_budget,
+                session_history_token_budget=self._config.session_history_token_budget,
+                session_history_recent_turns_on_over_budget=(
+                    self._config.session_history_recent_turns_on_over_budget
+                ),
+            )
+        )
 
     def run(
         self,
@@ -730,11 +748,18 @@ class ReActAgent:
         query: str,
         session_id: str | None,
     ) -> list[Message]:
-        tool_text = self._format_tools()
-        memory_text = self._format_memories(user_id, query)
-        session_text = self._format_session(session_id)
-        local_topic_text = self._format_local_topic_candidates(query)
-        history_messages = self._session_history_messages(session_id)
+        system_prompt = self._react_context.trim_system_prompt(self._config.system_prompt)
+        tool_text = self._react_context.trim_context_extra_text(self._format_tools())
+        memory_text = self._react_context.trim_memory_text(
+            self._format_memories(user_id, query),
+        )
+        session_text = self._react_context.trim_context_extra_text(
+            self._format_session(session_id),
+        )
+        local_topic_text = self._react_context.trim_context_extra_text(
+            self._format_local_topic_candidates(query),
+        )
+        history_messages = self._session_history_messages(session_id, current_query=query)
         current_turn_in_history = (
             bool(history_messages)
             and history_messages[-1].role == "user"
@@ -746,7 +771,7 @@ class ReActAgent:
             Message(
                 role="system",
                 content=(
-                    f"{self._config.system_prompt}\n\n"
+                    f"{system_prompt}\n\n"
                     f"当前系统时间：{current_time}\n\n"
                     f"可用工具：\n{tool_text}\n\n"
                     f"相关记忆：\n{memory_text}\n\n"
@@ -758,107 +783,22 @@ class ReActAgent:
             *([] if current_turn_in_history else [Message(role="user", content=query)]),
         ]
 
-    def _session_history_messages(self, session_id: str | None) -> list[Message]:
+    def _session_history_messages(
+        self,
+        session_id: str | None,
+        *,
+        current_query: str | None = None,
+    ) -> list[Message]:
         if not self._session_manager or not session_id:
             return []
         history = self._session_manager.get_history(
             session_id,
             limit=None,
         )
-        restored: list[Message] = []
-        for item in history:
-            if item.role not in {"user", "assistant", "tool"}:
-                continue
-            if not item.content and item.metadata.get("type") != "tool_call":
-                continue
-            restored.append(
-                Message(
-                    role=item.role,
-                    content=item.content,
-                    name=item.metadata.get("name"),
-                    tool_call_id=item.metadata.get("tool_call_id"),
-                    metadata=dict(item.metadata),
-                )
-            )
-        return self._limit_history_messages(
-            self._complete_tool_history_messages(restored),
-            self._config.session_history_limit,
+        return self._react_context.session_history_messages(
+            history,
+            current_query=current_query,
         )
-
-    @classmethod
-    def _complete_tool_history_messages(cls, messages: list[Message]) -> list[Message]:
-        completed: list[Message] = []
-        index = 0
-        while index < len(messages):
-            message = messages[index]
-            tool_calls = message.metadata.get("tool_calls") if message.role == "assistant" else None
-            if not tool_calls:
-                if message.role != "tool":
-                    completed.append(message)
-                index += 1
-                continue
-
-            expected_ids = [
-                str(call.get("id"))
-                for call in tool_calls
-                if isinstance(call, dict) and call.get("id")
-            ]
-            if not expected_ids:
-                index += 1
-                continue
-
-            block = [message]
-            found_ids: set[str] = set()
-            scan = index + 1
-            while scan < len(messages) and messages[scan].role == "tool":
-                tool_message = messages[scan]
-                tool_call_id = str(tool_message.tool_call_id or "")
-                if tool_call_id in expected_ids:
-                    block.append(tool_message)
-                    found_ids.add(tool_call_id)
-                scan += 1
-
-            if all(call_id in found_ids for call_id in expected_ids):
-                completed.extend(block)
-            index = scan
-        return completed
-
-    @classmethod
-    def _limit_history_messages(cls, messages: list[Message], limit: int | None) -> list[Message]:
-        if limit is None or limit < 0 or len(messages) <= limit:
-            return messages
-
-        limited: list[Message] = []
-        index = len(messages) - 1
-        while index >= 0 and len(limited) < limit:
-            message = messages[index]
-            if message.role != "tool":
-                limited.append(message)
-                index -= 1
-                continue
-
-            block_end = index
-            expected_ids: set[str] = set()
-            while index >= 0 and messages[index].role == "tool":
-                if messages[index].tool_call_id:
-                    expected_ids.add(str(messages[index].tool_call_id))
-                index -= 1
-            if index < 0:
-                continue
-            assistant = messages[index]
-            tool_calls = assistant.metadata.get("tool_calls") if assistant.role == "assistant" else None
-            assistant_ids = {
-                str(call.get("id"))
-                for call in tool_calls or []
-                if isinstance(call, dict) and call.get("id")
-            }
-            if assistant_ids and assistant_ids.issubset(expected_ids):
-                block = messages[index : block_end + 1]
-                if len(limited) + len(block) <= limit:
-                    limited.extend(reversed(block))
-            index -= 1
-
-        return list(reversed(limited))
 
     def _save_user_input_history(
         self,
