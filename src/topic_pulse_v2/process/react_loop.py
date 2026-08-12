@@ -276,17 +276,16 @@ class ReActAgent:
                     raw_response=response.content,
                 )
                 steps.append(step)
-                messages.append(
-                    Message(
-                        role="assistant",
-                        content=response.content,
-                        metadata={
-                            "tool_calls": self._assistant_tool_calls(
-                                step.tool_calls,
-                            )
-                        },
-                    )
+                assistant_message = Message(
+                    role="assistant",
+                    content=response.content,
+                    metadata={
+                        "tool_calls": self._assistant_tool_calls(
+                            step.tool_calls,
+                        )
+                    },
                 )
+                messages.append(assistant_message)
 
                 if step.final_answer is not None:
                     answer = step.final_answer
@@ -294,6 +293,7 @@ class ReActAgent:
                     break
 
                 if step.tool_calls:
+                    self._save_internal_assistant_history(session_id, assistant_message, index)
                     for tool_call in step.tool_calls:
                         tool_request = ToolCallRequest(
                             name=tool_call["name"],
@@ -333,14 +333,14 @@ class ReActAgent:
                             step.tool_result = tool_result
                         if tool_result.success:
                             self._remember_tool_observation(tool_observations, tool_result)
-                        messages.append(
-                            Message(
-                                role="tool",
-                                name=tool_result.name,
-                                tool_call_id=tool_result.call_id,
-                                content=self._format_observation(tool_result),
-                            )
+                        tool_message = Message(
+                            role="tool",
+                            name=tool_result.name,
+                            tool_call_id=tool_result.call_id,
+                            content=self._format_observation(tool_result),
                         )
+                        messages.append(tool_message)
+                        self._save_internal_tool_history(session_id, tool_message, index)
                     step.observation = [
                         result.result if result.success else result.error
                         for result in step.tool_results
@@ -540,13 +540,12 @@ class ReActAgent:
                 raw_response=response.content,
             )
             steps.append(step)
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=response.content,
-                    metadata={"tool_calls": self._assistant_tool_calls(step.tool_calls)},
-                )
+            assistant_message = Message(
+                role="assistant",
+                content=response.content,
+                metadata={"tool_calls": self._assistant_tool_calls(step.tool_calls)},
             )
+            messages.append(assistant_message)
 
             if step.final_answer is not None:
                 answer = step.final_answer
@@ -560,6 +559,7 @@ class ReActAgent:
                 break
 
             if step.tool_calls:
+                self._save_internal_assistant_history(session_id, assistant_message, index)
                 for tool_call in step.tool_calls:
                     tool_request = ToolCallRequest(
                         name=tool_call["name"],
@@ -610,14 +610,14 @@ class ReActAgent:
                         step.tool_result = tool_result
                     if tool_result.success:
                         self._remember_tool_observation(tool_observations, tool_result)
-                    messages.append(
-                        Message(
-                            role="tool",
-                            name=tool_result.name,
-                            tool_call_id=tool_result.call_id,
-                            content=self._format_observation(tool_result),
-                        )
+                    tool_message = Message(
+                        role="tool",
+                        name=tool_result.name,
+                        tool_call_id=tool_result.call_id,
+                        content=self._format_observation(tool_result),
                     )
+                    messages.append(tool_message)
+                    self._save_internal_tool_history(session_id, tool_message, index)
                     yield ReActStreamEvent(
                         type="tool_end",
                         session_id=session_id,
@@ -763,16 +763,102 @@ class ReActAgent:
             return []
         history = self._session_manager.get_history(
             session_id,
-            limit=self._config.session_history_limit,
+            limit=None,
         )
-        messages: list[Message] = []
+        restored: list[Message] = []
         for item in history:
-            if item.role not in {"user", "assistant"}:
+            if item.role not in {"user", "assistant", "tool"}:
                 continue
-            if not item.content:
+            if not item.content and item.metadata.get("type") != "tool_call":
                 continue
-            messages.append(Message(role=item.role, content=item.content))
-        return messages
+            restored.append(
+                Message(
+                    role=item.role,
+                    content=item.content,
+                    name=item.metadata.get("name"),
+                    tool_call_id=item.metadata.get("tool_call_id"),
+                    metadata=dict(item.metadata),
+                )
+            )
+        return self._limit_history_messages(
+            self._complete_tool_history_messages(restored),
+            self._config.session_history_limit,
+        )
+
+    @classmethod
+    def _complete_tool_history_messages(cls, messages: list[Message]) -> list[Message]:
+        completed: list[Message] = []
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            tool_calls = message.metadata.get("tool_calls") if message.role == "assistant" else None
+            if not tool_calls:
+                if message.role != "tool":
+                    completed.append(message)
+                index += 1
+                continue
+
+            expected_ids = [
+                str(call.get("id"))
+                for call in tool_calls
+                if isinstance(call, dict) and call.get("id")
+            ]
+            if not expected_ids:
+                index += 1
+                continue
+
+            block = [message]
+            found_ids: set[str] = set()
+            scan = index + 1
+            while scan < len(messages) and messages[scan].role == "tool":
+                tool_message = messages[scan]
+                tool_call_id = str(tool_message.tool_call_id or "")
+                if tool_call_id in expected_ids:
+                    block.append(tool_message)
+                    found_ids.add(tool_call_id)
+                scan += 1
+
+            if all(call_id in found_ids for call_id in expected_ids):
+                completed.extend(block)
+            index = scan
+        return completed
+
+    @classmethod
+    def _limit_history_messages(cls, messages: list[Message], limit: int | None) -> list[Message]:
+        if limit is None or limit < 0 or len(messages) <= limit:
+            return messages
+
+        limited: list[Message] = []
+        index = len(messages) - 1
+        while index >= 0 and len(limited) < limit:
+            message = messages[index]
+            if message.role != "tool":
+                limited.append(message)
+                index -= 1
+                continue
+
+            block_end = index
+            expected_ids: set[str] = set()
+            while index >= 0 and messages[index].role == "tool":
+                if messages[index].tool_call_id:
+                    expected_ids.add(str(messages[index].tool_call_id))
+                index -= 1
+            if index < 0:
+                continue
+            assistant = messages[index]
+            tool_calls = assistant.metadata.get("tool_calls") if assistant.role == "assistant" else None
+            assistant_ids = {
+                str(call.get("id"))
+                for call in tool_calls or []
+                if isinstance(call, dict) and call.get("id")
+            }
+            if assistant_ids and assistant_ids.issubset(expected_ids):
+                block = messages[index : block_end + 1]
+                if len(limited) + len(block) <= limit:
+                    limited.extend(reversed(block))
+            index -= 1
+
+        return list(reversed(limited))
 
     def _save_user_input_history(
         self,
@@ -804,6 +890,47 @@ class ReActAgent:
             "assistant",
             answer,
             metadata={"type": "final_answer", "completed": completed},
+        )
+
+    def _save_internal_assistant_history(
+        self,
+        session_id: str | None,
+        message: Message,
+        step_index: int,
+    ) -> None:
+        if not self._session_manager or not session_id:
+            return
+        self._session_manager.append_history(
+            session_id,
+            "assistant",
+            message.content,
+            metadata={
+                "type": "tool_call",
+                "visibility": "internal",
+                "step_index": step_index,
+                "tool_calls": message.metadata.get("tool_calls") or [],
+            },
+        )
+
+    def _save_internal_tool_history(
+        self,
+        session_id: str | None,
+        message: Message,
+        step_index: int,
+    ) -> None:
+        if not self._session_manager or not session_id:
+            return
+        self._session_manager.append_history(
+            session_id,
+            "tool",
+            message.content,
+            metadata={
+                "type": "tool_result",
+                "visibility": "internal",
+                "step_index": step_index,
+                "name": message.name,
+                "tool_call_id": message.tool_call_id,
+            },
         )
 
     @staticmethod

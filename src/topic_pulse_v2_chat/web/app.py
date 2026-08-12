@@ -536,6 +536,8 @@ def _create_scheduler_service(chat_runtime: ChatRuntime | None = None) -> Schedu
 
 def _session_title(messages: list[SessionMessage], fallback: str) -> str:
     for message in messages:
+        if _is_internal_session_message(message):
+            continue
         if message.role != "user":
             continue
         title = " ".join(message.content.strip().split())
@@ -546,21 +548,37 @@ def _session_title(messages: list[SessionMessage], fallback: str) -> str:
 
 def _session_preview(messages: list[SessionMessage]) -> str:
     for message in reversed(messages):
+        if _is_internal_session_message(message):
+            continue
         if message.role == "user":
             continue
         preview = " ".join(_display_answer(message.content).strip().split())
         if preview:
             return preview[:96]
     for message in reversed(messages):
+        if _is_internal_session_message(message):
+            continue
         preview = " ".join(message.content.strip().split())
         if preview:
             return preview[:96]
     return ""
 
 
+def _visible_session_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
+    return [
+        message
+        for message in messages
+        if not _is_internal_session_message(message)
+    ]
+
+
+def _is_internal_session_message(message: SessionMessage) -> bool:
+    return (message.metadata or {}).get("visibility") == "internal"
+
+
 def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage]:
     formatted = []
-    for message in messages:
+    for message in _visible_session_messages(messages):
         topic_update = _answer_topic_update(message.content) if message.role == "assistant" else {}
         content = (
             _display_answer_for_topic_update(message.content, topic_update)
@@ -596,7 +614,7 @@ def _session_summary(path: Path, store: MarkdownSessionHistoryStore) -> SessionS
         id=path.stem,
         title=_session_title(messages, path.stem),
         updated_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-        message_count=len(messages),
+        message_count=len(_visible_session_messages(messages)),
         preview=_session_preview(messages),
     )
 

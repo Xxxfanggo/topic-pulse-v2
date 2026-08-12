@@ -511,6 +511,16 @@ class ChatWebAppTests(unittest.TestCase):
                 "hello\n"
                 "<!-- /message -->\n\n"
                 "<!-- message\n"
+                '{"role": "assistant", "created_at": "2026-08-05T10:00:01.500000+00:00", "metadata": {"type": "tool_call", "visibility": "internal", "tool_calls": [{"id": "call-1", "name": "lookup_topic", "args": {}, "type": "tool_call"}]}}\n'
+                "-->\n"
+                '{"thought":"call tool","action":"lookup_topic","arguments":{}}\n'
+                "<!-- /message -->\n\n"
+                "<!-- message\n"
+                '{"role": "tool", "created_at": "2026-08-05T10:00:01.700000+00:00", "metadata": {"type": "tool_result", "visibility": "internal", "name": "lookup_topic", "tool_call_id": "call-1"}}\n'
+                "-->\n"
+                '{"tool":"lookup_topic","success":true,"result":{"status":"ok"}}\n'
+                "<!-- /message -->\n\n"
+                "<!-- message\n"
                 '{"role": "assistant", "created_at": "2026-08-05T10:00:01+00:00", "metadata": {"type": "final_answer", "completed": true}}\n'
                 "-->\n"
                 '<think>internal reasoning should be hidden</think>\n\n'
@@ -534,7 +544,9 @@ class ChatWebAppTests(unittest.TestCase):
                 self.assertEqual(sessions.status_code, 200)
                 self.assertEqual(sessions.json()["sessions"][0]["id"], "session-existing")
                 self.assertEqual(sessions.json()["sessions"][0]["title"], "hello")
+                self.assertEqual(sessions.json()["sessions"][0]["message_count"], 2)
                 self.assertEqual(detail.status_code, 200)
+                self.assertEqual(len(detail.json()["messages"]), 2)
                 self.assertEqual(detail.json()["messages"][0]["content"], "hello")
                 self.assertEqual(detail.json()["messages"][1]["content"], "## Insight\n\n- Alpha")
                 self.assertTrue(detail.json()["messages"][1]["completed"])
