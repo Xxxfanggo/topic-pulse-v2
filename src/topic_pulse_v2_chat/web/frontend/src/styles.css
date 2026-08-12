@@ -1239,6 +1239,7 @@ body {
   border-left: 1px solid #e5e7f0;
   background: #fbfcff !important;
   padding: 18px;
+  display: none;  /*暂时先隐藏右侧部分*/
 }
 
 .panelStack {
