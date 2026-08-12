@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from topic_pulse_v2.trace import log_event, resolve_trace_log_path
+from topic_pulse_v2.trace import log_event, log_markdown, resolve_trace_log_path
 
 
 class TraceTests(unittest.TestCase):
@@ -45,6 +45,25 @@ class TraceTests(unittest.TestCase):
             self.assertEqual([event["type"] for event in events], ["second", "first"])
             self.assertTrue(all(event["timestamp"] for event in events))
             self.assertFalse(path.exists())
+
+    def test_log_markdown_writes_readable_block(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "trace.jsonl"
+
+            log_markdown(
+                str(path),
+                "llm_prompt",
+                "[system]\n规则\n\n[user]\n你好",
+                session_id="session-1",
+                step_index=2,
+            )
+
+            partition_path = resolve_trace_log_path(str(path))
+            content = partition_path.read_text(encoding="utf-8")
+
+            self.assertIn("## llm_prompt", content)
+            self.assertIn("session_id: session-1", content)
+            self.assertIn("[user]\n你好", content)
 
 
 if __name__ == "__main__":

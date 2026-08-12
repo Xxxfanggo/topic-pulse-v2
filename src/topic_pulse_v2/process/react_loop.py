@@ -23,7 +23,7 @@ from topic_pulse_v2.context_trim import (
     ContextTrimmer,
     PassthroughContextTrimmer,
 )
-from topic_pulse_v2.trace import log_event
+from topic_pulse_v2.trace import log_event, log_markdown
 from topic_pulse_v2.llm_call import LLMClient, Message
 from topic_pulse_v2.memory import MemoryStore
 from topic_pulse_v2.session import SessionManager, SessionStatus
@@ -215,6 +215,13 @@ class ReActAgent:
                     )
                 )
                 llm_messages = context.messages
+                log_markdown(
+                    self._config.trace_log_path,
+                    "llm_prompt",
+                    self._format_prompt_for_debug(llm_messages),
+                    session_id=session_id,
+                    step_index=index,
+                )
                 log_event(
                     self._config.trace_log_path,
                     "llm_request",
@@ -434,6 +441,13 @@ class ReActAgent:
                 )
             )
             llm_messages = context.messages
+            log_markdown(
+                self._config.trace_log_path,
+                "llm_prompt",
+                self._format_prompt_for_debug(llm_messages),
+                session_id=session_id,
+                step_index=index,
+            )
             log_event(
                 self._config.trace_log_path,
                 "llm_request",

@@ -68,6 +68,7 @@ class ReActMultiToolCallsTests(unittest.TestCase):
             events = [
                 json.loads(line)
                 for line in resolve_trace_log_path(str(trace_path)).read_text(encoding="utf-8").splitlines()
+                if line.startswith('{"timestamp"')
             ]
             tool_requests = [event for event in events if event["type"] == "tool_request"]
             tool_responses = [event for event in events if event["type"] == "tool_response"]
