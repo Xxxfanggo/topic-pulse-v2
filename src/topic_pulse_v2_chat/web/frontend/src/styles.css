@@ -57,6 +57,18 @@ body {
   display: grid;
 }
 
+.brand,
+.newChatButton,
+.navMenu,
+.visitorCard {
+  flex: 0 0 auto;
+}
+
+.newChatButton {
+  min-height: 38px;
+  padding-inline: 14px;
+}
+
 .navMenu {
   border-inline-end: 0 !important;
 }
@@ -64,8 +76,10 @@ body {
 .siderSection {
   display: grid;
   gap: 8px;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding-right: 2px;
 }
 
@@ -80,6 +94,12 @@ body {
 .stepList {
   display: grid;
   gap: 8px;
+}
+
+.sessionList {
+  align-content: start;
+  min-height: 0;
+  overflow: auto;
 }
 
 .sessionItem {

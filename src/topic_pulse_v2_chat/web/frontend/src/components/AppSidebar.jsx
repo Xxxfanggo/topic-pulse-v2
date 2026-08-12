@@ -36,7 +36,7 @@ export default function AppSidebar({
           </div>
         </Flex>
 
-        <Button type="primary" block icon={<PlusOutlined />} onClick={onCreateNewChat}>
+        <Button type="primary" block icon={<PlusOutlined />} className="newChatButton" onClick={onCreateNewChat}>
           新建对话
         </Button>
 
