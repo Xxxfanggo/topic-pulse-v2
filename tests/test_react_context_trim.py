@@ -5,6 +5,10 @@ from topic_pulse_v2.session import SessionMessage
 
 
 class ReActContextManagerTests(unittest.TestCase):
+    def test_estimates_chinese_tokens_more_conservatively(self):
+        self.assertEqual(ReActContextManager.approx_token_count("中文测试内容很好"), 13)
+        self.assertEqual(ReActContextManager.approx_token_count("abcdefgh"), 2)
+
     def test_trims_text_to_budget(self):
         manager = ReActContextManager()
 
@@ -12,6 +16,15 @@ class ReActContextManagerTests(unittest.TestCase):
 
         self.assertIn("[content trimmed to fit budget]", trimmed)
         self.assertLess(len(trimmed), 80)
+
+    def test_trims_chinese_text_by_weighted_token_budget(self):
+        manager = ReActContextManager()
+
+        trimmed = manager.trim_text_to_token_budget("中文测试内容很好" * 10, 16)
+
+        self.assertIn("[content trimmed to fit budget]", trimmed)
+        self.assertTrue(trimmed.startswith("中文测试内容很好"))
+        self.assertFalse(trimmed.startswith("中文测试内容很好中文测试内容很好"))
 
     def test_restores_complete_tool_block_with_empty_assistant_content(self):
         manager = ReActContextManager()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil
 
 from topic_pulse_v2.llm_call import Message
 from topic_pulse_v2.session import SessionMessage
@@ -208,12 +209,44 @@ class ReActContextManager:
             return ""
         if cls.approx_token_count(text) <= token_budget:
             return text
-        char_budget = max(token_budget * 4, 0)
-        trimmed = text[:char_budget].rstrip()
+                                        trimmed = cls._text_within_token_budget(text, token_budget).rstrip()
         return f"{trimmed}\n\n[content trimmed to fit budget]"
 
     @staticmethod
     def approx_token_count(text: str) -> int:
         if not text:
             return 0
-        return max(1, (len(text) + 3) // 4)
+        estimated = 0.0
+        for char in text:
+            estimated += ReActContextManager._char_token_weight(char)
+        return max(1, ceil(estimated))
+
+    @classmethod
+    def _text_within_token_budget(cls, text: str, token_budget: int) -> str:
+        if token_budget <= 0:
+            return ""
+        estimated = 0.0
+        chars: list[str] = []
+        for char in text:
+            estimated += cls._char_token_weight(char)
+            if estimated > token_budget:
+                break
+            chars.append(char)
+        return "".join(chars)
+
+    @staticmethod
+    def _char_token_weight(char: str) -> float:
+        codepoint = ord(char)
+        if (
+            0x3400 <= codepoint <= 0x4DBF
+            or 0x4E00 <= codepoint <= 0x9FFF
+            or 0xF900 <= codepoint <= 0xFAFF
+            or 0x20000 <= codepoint <= 0x2A6DF
+            or 0x2A700 <= codepoint <= 0x2B73F
+            or 0x2B740 <= codepoint <= 0x2B81F
+            or 0x2B820 <= codepoint <= 0x2CEAF
+        ):
+            return 1.6
+        if codepoint < 128:
+            return 0.25
+        return 1.0
