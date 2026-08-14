@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import unittest
 from pathlib import Path
@@ -7,7 +8,7 @@ from unittest.mock import patch
 try:
     from fastapi.testclient import TestClient
 
-    from topic_pulse_v2.scheduler import SchedulerService, ScheduledTaskRegistry, SQLiteSchedulerStore
+    from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
     from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
     from topic_pulse_v2.topics import SQLiteTopicStore
     from topic_pulse_v2_chat.web import create_app
@@ -87,7 +88,9 @@ class WebSchedulerApiTests(unittest.TestCase):
                     self.assertEqual(created.status_code, 200)
                     self.assertEqual(created.json()["task_name"], "refresh_topic")
                     self.assertEqual(created.json()["trigger_args"], {"minutes": 30})
+                    self.assertEqual(created.json()["kwargs"]["user_id"], "anonymous-user-1")
                     self.assertEqual(created.json()["metadata"]["topic_id"], topic.id)
+                    self.assertEqual(created.json()["metadata"]["user_id"], "anonymous-user-1")
                     self.assertEqual(duplicate.json()["id"], created.json()["id"])
                     self.assertEqual(duplicate.json()["trigger_args"], {"minutes": 30})
                     self.assertEqual(topic_schedule.json()["id"], created.json()["id"])
@@ -133,7 +136,42 @@ class WebSchedulerApiTests(unittest.TestCase):
             self.assertEqual(run.status_code, 200)
             self.assertEqual(run.json()["status"], "success")
             self.assertIn('"new_count": 1', run.json()["result_summary"])
+            self.assertEqual(chat_runtime.calls[0]["user_id"], "anonymous-user-1")
             self.assertEqual(chat_runtime.calls[0]["metadata"]["source"], "scheduler")
+
+    def test_topic_refresh_job_backfills_user_id_from_metadata(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            chat_runtime = FakeChatRuntime()
+            registry = ScheduledTaskRegistry()
+            register_builtin_tasks(registry, chat_runtime=chat_runtime)
+            scheduler = SchedulerService(
+                store=SQLiteSchedulerStore(path=root / "topic_pulse.sqlite3"),
+                registry=registry,
+                enabled=False,
+            )
+            scheduler.start()
+            try:
+                job = ScheduledJob(
+                    id="legacy-topic-refresh",
+                    task_name="refresh_topic",
+                    trigger="interval",
+                    trigger_args={"minutes": 30},
+                    kwargs={"topic_name": "Memory Prices"},
+                    metadata={
+                        "type": "topic_refresh",
+                        "topic_id": "topic-1",
+                        "user_id": "user-from-metadata",
+                    },
+                )
+                scheduler.add_job(job)
+
+                run = asyncio.run(scheduler.run_job_now(job.id))
+            finally:
+                scheduler.shutdown()
+
+            self.assertEqual(run.status, "success")
+            self.assertEqual(chat_runtime.calls[0]["user_id"], "user-from-metadata")
 
     def test_topic_schedule_returns_not_found_for_missing_topic(self):
         with TemporaryDirectory() as temp_dir:

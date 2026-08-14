@@ -218,10 +218,17 @@ def _topic_refresh_job_id(topic_id: str) -> str:
     return f"topic-refresh-{uuid5(NAMESPACE_URL, f'topic-pulse/topic/{topic_id}')}"
 
 
-def _find_topic_refresh_job(scheduler: SchedulerRuntime, topic_id: str) -> ScheduledJob | None:
+def _find_topic_refresh_job(
+    scheduler: SchedulerRuntime,
+    topic_id: str,
+    *,
+    user_id: str | None = None,
+) -> ScheduledJob | None:
     for job in scheduler.list_jobs():
         metadata = job.metadata or {}
         if metadata.get("type") == "topic_refresh" and metadata.get("topic_id") == topic_id:
+            if user_id is not None and metadata.get("user_id") != user_id:
+                continue
             return job
     return None
 
@@ -993,10 +1000,8 @@ def create_app(
         path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        existing = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
+        existing = _find_topic_refresh_job(app.state.scheduler_service, topic_id, user_id=user.id)
         if existing is not None:
-            if not _job_belongs_to_user(existing, user.id):
-                raise HTTPException(status_code=404, detail="Scheduled job not found")
             return _scheduler_job_response(existing)
 
         topic = _topic_summary_from_record(record)
@@ -1035,9 +1040,7 @@ def create_app(
         path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        job = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
-        if job is not None and not _job_belongs_to_user(job, user.id):
-            raise HTTPException(status_code=404, detail="Scheduled job not found")
+        job = _find_topic_refresh_job(app.state.scheduler_service, topic_id, user_id=user.id)
         return _scheduler_job_response(job) if job is not None else None
 
     @app.post("/api/scheduler/jobs/{job_id}/pause", response_model=SchedulerJobResponse)

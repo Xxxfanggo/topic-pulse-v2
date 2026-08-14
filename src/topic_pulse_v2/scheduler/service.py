@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from dataclasses import replace
 from datetime import datetime
 from time import perf_counter
 from typing import Any
@@ -110,6 +111,7 @@ class SchedulerService:
     ) -> None:
         if self._scheduler is None:
             return
+        job = _with_runtime_kwargs(job)
         self._scheduler.add_job(
             self._run_job,
             trigger=job.trigger,
@@ -124,6 +126,7 @@ class SchedulerService:
         )
 
     async def _run_job(self, job: ScheduledJob) -> JobRun:
+        job = _with_runtime_kwargs(job)
         started = perf_counter()
         run = JobRun(
             id=str(uuid4()),
@@ -171,6 +174,22 @@ def _truncate_summary_fields(value: Any) -> Any:
     if isinstance(value, list):
         return [_truncate_summary_fields(item) for item in value]
     return value
+
+
+def _with_runtime_kwargs(job: ScheduledJob) -> ScheduledJob:
+    if job.task_name != "refresh_topic":
+        return job
+
+    kwargs = dict(job.kwargs or {})
+    if kwargs.get("user_id"):
+        return job
+
+    user_id = (job.metadata or {}).get("user_id")
+    if not user_id:
+        return job
+
+    kwargs["user_id"] = user_id
+    return replace(job, kwargs=kwargs)
 
 
 def _truncate_text(value: str, limit: int = SUMMARY_FIELD_LIMIT) -> str:

@@ -25,10 +25,18 @@ def refresh_topic(
     topic_name: str,
     *,
     chat_runtime: ChatRuntime | None = None,
-    user_id: str = "scheduler",
+    user_id: str | None = None,
     session_id: str | None = None,
 ) -> dict:
     """Refresh one tracked topic by reusing the existing chat runtime."""
+
+    if not user_id:
+        return {
+            "status": "skipped",
+            "topic_name": topic_name,
+            "new_count": 0,
+            "reason": "user_id is required for topic refresh",
+        }
 
     if chat_runtime is None:
         return {
