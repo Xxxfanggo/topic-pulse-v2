@@ -89,9 +89,9 @@ export default function AppSidebar({
 
         <Card size="small" className="visitorCard">
           <Flex align="center" gap={10}>
-            <Avatar>访</Avatar>
+            <Avatar>{userId?.slice(0, 1).toUpperCase() || 'U'}</Avatar>
             <div>
-              <Text strong>访客模式</Text>
+              <Text strong>已登录</Text>
               <Text type="secondary" className="blockText">
                 {userId}
               </Text>
