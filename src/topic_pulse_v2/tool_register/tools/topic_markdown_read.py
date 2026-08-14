@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from topic_pulse_v2.topics import SQLiteTopicStore
+
 from .topic_markdown_store import (
     DEFAULT_ROOT,
     SECTION_BASIC_INFO,
@@ -26,13 +28,23 @@ def topic_markdown_read_summary(
     query: str | None = None,
     *,
     root_dir: str = DEFAULT_ROOT,
+    user_id: str | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
     """Read topic Markdown summaries so the LLM can judge local topic matches."""
 
     root = Path(root_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    topics = [_read_markdown_summary(path, query or "") for path in root.glob("*.md")]
+    if user_id:
+        store = SQLiteTopicStore(topics_dir=root)
+        records = store.list_topics(user_id=user_id)
+        topics = [
+            _read_markdown_summary(Path(record.markdown_path), query or "", topic_id=record.id)
+            for record in records
+            if Path(record.markdown_path).exists()
+        ]
+    else:
+        topics = [_read_markdown_summary(path, query or "") for path in root.glob("*.md")]
     topics = sorted(
         topics,
         key=lambda item: (item["match_score"], item["updated_at"], item["topic_name"]),
@@ -56,18 +68,27 @@ def topic_markdown_read_detail(
     topic_name: str | None = None,
     path: str | None = None,
     root_dir: str = DEFAULT_ROOT,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Read full Markdown detail for one stored news topic."""
 
     root = Path(root_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    resolved_path = _resolve_topic_path(root, topic_name=topic_name, path=path)
+    topic_id = ""
+    if user_id:
+        store = SQLiteTopicStore(topics_dir=root)
+        record = _resolve_topic_record(store, user_id=user_id, topic_name=topic_name, path=path)
+        topic_id = record.id
+        resolved_path = Path(record.markdown_path).resolve()
+    else:
+        resolved_path = _resolve_topic_path(root, topic_name=topic_name, path=path)
     if not resolved_path.exists():
         raise FileNotFoundError(f"topic markdown does not exist: {resolved_path}")
 
     content = resolved_path.read_text(encoding="utf-8")
     timeline_items = _TopicMarkdownStore._extract_existing_timeline_items(content)
     return {
+        "topic_id": topic_id,
         "topic_name": _extract_title(content) or resolved_path.stem,
         "path": str(resolved_path),
         "basic_info": _extract_basic_info(content),
@@ -172,7 +193,7 @@ def register_topic_markdown_read_tools(
 register_tool = register_topic_markdown_read_tools
 
 
-def _read_markdown_summary(path: Path, query: str) -> dict[str, Any]:
+def _read_markdown_summary(path: Path, query: str, *, topic_id: str = "") -> dict[str, Any]:
     content = path.read_text(encoding="utf-8")
     title = _extract_title(content) or path.stem
     basic_info = _extract_basic_info(content)
@@ -180,6 +201,7 @@ def _read_markdown_summary(path: Path, query: str) -> dict[str, Any]:
     haystack = " ".join([title, summary, " ".join(basic_info.values())]).lower()
     score = _match_score(query, haystack)
     return {
+        "topic_id": topic_id,
         "topic_name": title,
         "path": str(path.resolve()),
         "basic_info": basic_info,
@@ -201,6 +223,27 @@ def _resolve_topic_path(root: Path, *, topic_name: str | None, path: str | None)
     if root not in resolved.parents:
         raise ValueError("topic markdown path must stay inside root_dir.")
     return resolved
+
+
+def _resolve_topic_record(
+    store: SQLiteTopicStore,
+    *,
+    user_id: str,
+    topic_name: str | None,
+    path: str | None,
+):
+    if topic_name:
+        record = store.get_by_title(user_id=user_id, title=topic_name)
+        if record is None:
+            raise FileNotFoundError(f"topic markdown does not exist: {topic_name}")
+        return record
+    if path:
+        resolved = Path(path).resolve()
+        for record in store.list_topics(user_id=user_id):
+            if Path(record.markdown_path).resolve() == resolved:
+                return record
+        raise ValueError("topic markdown path does not belong to current user.")
+    raise ValueError("topic_name and path cannot both be empty.")
 
 
 def _extract_title(content: str) -> str:

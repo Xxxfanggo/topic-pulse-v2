@@ -9,6 +9,7 @@ try:
 
     from topic_pulse_v2.scheduler import SchedulerService, ScheduledTaskRegistry, SQLiteSchedulerStore
     from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
+    from topic_pulse_v2.topics import SQLiteTopicStore
     from topic_pulse_v2_chat.web import create_app
 except ModuleNotFoundError:
     TestClient = None
@@ -56,34 +57,37 @@ class WebSchedulerApiTests(unittest.TestCase):
             root = Path(temp_dir)
             topics_dir = root / "topics"
             topics_dir.mkdir()
-            (topics_dir / "memory-prices.md").write_text(
+            topic_store = SQLiteTopicStore(db_path=root / "topics.sqlite3", topics_dir=topics_dir)
+            topic = topic_store.create_or_get_topic(user_id="anonymous-user-1", title="Memory Prices")
+            Path(topic.markdown_path).write_text(
                 "# Memory Prices\n\n## Summary\n\nTracked topic.\n",
                 encoding="utf-8",
             )
             scheduler = self._scheduler_service(root / "topic_pulse.sqlite3")
 
-            with patch.object(web_app_module, "TOPICS_DIR", topics_dir):
+            with patch.object(web_app_module, "_topic_store", return_value=topic_store):
                 with TestClient(
                     create_app(
                         chat_runtime=FakeChatRuntime(),
                         scheduler_service=scheduler,
+                        auth_required=False,
                     )
                 ) as client:
                     created = client.post(
-                        "/api/topics/memory-prices/schedule",
+                        f"/api/topics/{topic.id}/schedule",
                         json={"trigger": "interval", "interval_minutes": 30},
                     )
                     duplicate = client.post(
-                        "/api/topics/memory-prices/schedule",
+                        f"/api/topics/{topic.id}/schedule",
                         json={"trigger": "interval", "interval_minutes": 60},
                     )
-                    topic_schedule = client.get("/api/topics/memory-prices/schedule")
+                    topic_schedule = client.get(f"/api/topics/{topic.id}/schedule")
                     jobs = client.get("/api/scheduler/jobs")
 
                     self.assertEqual(created.status_code, 200)
                     self.assertEqual(created.json()["task_name"], "refresh_topic")
                     self.assertEqual(created.json()["trigger_args"], {"minutes": 30})
-                    self.assertEqual(created.json()["metadata"]["topic_id"], "memory-prices")
+                    self.assertEqual(created.json()["metadata"]["topic_id"], topic.id)
                     self.assertEqual(duplicate.json()["id"], created.json()["id"])
                     self.assertEqual(duplicate.json()["trigger_args"], {"minutes": 30})
                     self.assertEqual(topic_schedule.json()["id"], created.json()["id"])
@@ -108,18 +112,20 @@ class WebSchedulerApiTests(unittest.TestCase):
             root = Path(temp_dir)
             topics_dir = root / "topics"
             topics_dir.mkdir()
-            (topics_dir / "memory-prices.md").write_text(
+            topic_store = SQLiteTopicStore(db_path=root / "topics.sqlite3", topics_dir=topics_dir)
+            topic = topic_store.create_or_get_topic(user_id="anonymous-user-1", title="Memory Prices")
+            Path(topic.markdown_path).write_text(
                 "# Memory Prices\n\n## Summary\n\nTracked topic.\n",
                 encoding="utf-8",
             )
             chat_runtime = FakeChatRuntime()
 
-            with patch.object(web_app_module, "TOPICS_DIR", topics_dir):
+            with patch.object(web_app_module, "_topic_store", return_value=topic_store):
                 with patch.object(web_app_module, "SQLiteSchedulerStore") as store_class:
                     store_class.return_value = SQLiteSchedulerStore(path=root / "topic_pulse.sqlite3")
-                    with TestClient(create_app(chat_runtime=chat_runtime)) as client:
+                    with TestClient(create_app(chat_runtime=chat_runtime, auth_required=False)) as client:
                         created = client.post(
-                            "/api/topics/memory-prices/schedule",
+                            f"/api/topics/{topic.id}/schedule",
                             json={"trigger": "interval", "interval_minutes": 30},
                         )
                         run = client.post(f"/api/scheduler/jobs/{created.json()['id']}/run")
@@ -135,13 +141,15 @@ class WebSchedulerApiTests(unittest.TestCase):
             root = Path(temp_dir)
             topics_dir = root / "topics"
             topics_dir.mkdir()
+            topic_store = SQLiteTopicStore(db_path=root / "topics.sqlite3", topics_dir=topics_dir)
             scheduler = self._scheduler_service(root / "topic_pulse.sqlite3")
 
-            with patch.object(web_app_module, "TOPICS_DIR", topics_dir):
+            with patch.object(web_app_module, "_topic_store", return_value=topic_store):
                 with TestClient(
                     create_app(
                         chat_runtime=FakeChatRuntime(),
                         scheduler_service=scheduler,
+                        auth_required=False,
                     )
                 ) as client:
                     response = client.post(

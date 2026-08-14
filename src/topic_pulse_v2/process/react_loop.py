@@ -317,6 +317,7 @@ class ReActAgent:
                             name=tool_call["name"],
                             arguments=tool_call.get("args", {}),
                             call_id=tool_call.get("id"),
+                            metadata={"user_id": user_id},
                         )
                         log_event(
                             self._config.trace_log_path,
@@ -583,6 +584,7 @@ class ReActAgent:
                         name=tool_call["name"],
                         arguments=tool_call.get("args", {}),
                         call_id=tool_call.get("id"),
+                        metadata={"user_id": user_id},
                     )
                     yield ReActStreamEvent(
                         type="tool_start",

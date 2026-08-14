@@ -4,11 +4,13 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 try:
     from fastapi.testclient import TestClient
 
+    from topic_pulse_v2.topics import SQLiteTopicStore
     from topic_pulse_v2_chat.web import create_app as create_web_app
 except ModuleNotFoundError:
     TestClient = None
@@ -483,25 +485,23 @@ class ChatWebAppTests(unittest.TestCase):
     def test_topics_list_and_detail(self):
         with TemporaryDirectory() as temp_dir:
             topics_dir = Path(temp_dir)
-            topic_path = topics_dir / "test-topic.md"
+            topic_store = SQLiteTopicStore(db_path=topics_dir / "topic_pulse.sqlite3", topics_dir=topics_dir)
+            topic = topic_store.create_or_get_topic(user_id="anonymous-user-1", title="Test Topic")
+            topic_path = Path(topic.markdown_path)
             topic_path.write_text("# Test Topic\n\nThis is a topic summary.\n\n## Timeline\n\n- Node", encoding="utf-8")
 
             web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
 
-            original_topics_dir = web_app.TOPICS_DIR
-            web_app.TOPICS_DIR = topics_dir
-            try:
+            with patch.object(web_app, "_topic_store", return_value=topic_store):
                 client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
 
                 topics = client.get("/api/topics")
-                detail = client.get("/api/topics/test-topic")
+                detail = client.get(f"/api/topics/{topic.id}")
 
                 self.assertEqual(topics.status_code, 200)
                 self.assertEqual(topics.json()["topics"][0]["title"], "Test Topic")
                 self.assertEqual(detail.status_code, 200)
                 self.assertIn("This is a topic summary.", detail.json()["content"])
-            finally:
-                web_app.TOPICS_DIR = original_topics_dir
 
     def test_sessions_list_and_detail_from_markdown_history(self):
         with TemporaryDirectory() as temp_dir:

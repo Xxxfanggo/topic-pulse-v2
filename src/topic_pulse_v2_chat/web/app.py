@@ -23,6 +23,7 @@ from topic_pulse_v2.config import load_env_file
 from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage
+from topic_pulse_v2.topics import SQLiteTopicStore, TopicRecord
 from topic_pulse_v2_chat.web.schemas import (
     AuthLoginRequest,
     AuthMessageResponse,
@@ -139,16 +140,29 @@ def _topic_preview(content: str) -> str:
     return " ".join(paragraphs)[:180]
 
 
-def _topic_summary(path: Path) -> TopicSummary:
+def _topic_summary(path: Path, *, topic_id: str | None = None, title: str | None = None, updated_at: datetime | None = None) -> TopicSummary:
     content = path.read_text(encoding="utf-8")
     stat = path.stat()
     return TopicSummary(
-        id=path.stem,
-        title=_topic_title(content, path.stem),
+        id=topic_id or path.stem,
+        title=title or _topic_title(content, path.stem),
         filename=path.name,
-        updated_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        updated_at=(updated_at or datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)).isoformat(),
         size=stat.st_size,
         preview=_topic_preview(content),
+    )
+
+
+def _topic_store() -> SQLiteTopicStore:
+    return SQLiteTopicStore(topics_dir=TOPICS_DIR)
+
+
+def _topic_summary_from_record(record: TopicRecord) -> TopicSummary:
+    return _topic_summary(
+        Path(record.markdown_path),
+        topic_id=record.id,
+        title=record.title,
+        updated_at=record.updated_at,
     )
 
 
@@ -210,6 +224,18 @@ def _find_topic_refresh_job(scheduler: SchedulerRuntime, topic_id: str) -> Sched
         if metadata.get("type") == "topic_refresh" and metadata.get("topic_id") == topic_id:
             return job
     return None
+
+
+def _job_belongs_to_user(job: ScheduledJob, user_id: str) -> bool:
+    metadata = job.metadata or {}
+    return metadata.get("user_id") == user_id
+
+
+def _get_user_scheduler_job(scheduler: SchedulerRuntime, job_id: str, user_id: str) -> ScheduledJob:
+    for job in scheduler.list_jobs():
+        if job.id == job_id and _job_belongs_to_user(job, user_id):
+            return job
+    raise LookupError(f"Scheduled job not found: {job_id}")
 
 
 def _topic_refresh_trigger_args(request: CreateTopicRefreshJobRequest) -> tuple[str, dict]:
@@ -919,39 +945,57 @@ def create_app(
         )
 
     @app.get("/api/topics", response_model=TopicListResponse)
-    def list_topics() -> TopicListResponse:
-        if not TOPICS_DIR.exists():
-            return TopicListResponse()
-        topics = [_topic_summary(path) for path in sorted(TOPICS_DIR.glob("*.md"), key=lambda item: item.stat().st_mtime, reverse=True)]
+    def list_topics(user: AuthUser = Depends(current_user)) -> TopicListResponse:
+        store = _topic_store()
+        topics = [
+            _topic_summary_from_record(record)
+            for record in store.list_topics(user_id=user.id)
+            if Path(record.markdown_path).exists()
+        ]
         return TopicListResponse(topics=topics)
 
     @app.get("/api/topics/{topic_id}", response_model=TopicDetailResponse)
-    def get_topic(topic_id: str) -> TopicDetailResponse:
-        path = _topic_path(topic_id)
+    def get_topic(topic_id: str, user: AuthUser = Depends(current_user)) -> TopicDetailResponse:
+        try:
+            record = _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        summary = _topic_summary(path)
+        summary = _topic_summary_from_record(record)
         return TopicDetailResponse(**_model_data(summary), content=path.read_text(encoding="utf-8"))
 
     @app.get("/api/scheduler/jobs", response_model=SchedulerJobListResponse)
-    def list_scheduler_jobs() -> SchedulerJobListResponse:
+    def list_scheduler_jobs(user: AuthUser = Depends(current_user)) -> SchedulerJobListResponse:
         return SchedulerJobListResponse(
-            jobs=[_scheduler_job_response(job) for job in app.state.scheduler_service.list_jobs()]
+            jobs=[
+                _scheduler_job_response(job)
+                for job in app.state.scheduler_service.list_jobs()
+                if _job_belongs_to_user(job, user.id)
+            ]
         )
 
     @app.post("/api/topics/{topic_id}/schedule", response_model=SchedulerJobResponse)
     def create_topic_refresh_schedule(
         topic_id: str,
         request: CreateTopicRefreshJobRequest,
+        user: AuthUser = Depends(current_user),
     ) -> SchedulerJobResponse:
-        path = _topic_path(topic_id)
+        try:
+            record = _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
         existing = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
         if existing is not None:
+            if not _job_belongs_to_user(existing, user.id):
+                raise HTTPException(status_code=404, detail="Scheduled job not found")
             return _scheduler_job_response(existing)
 
-        topic = _topic_summary(path)
+        topic = _topic_summary_from_record(record)
         trigger, trigger_args = _topic_refresh_trigger_args(request)
         now = datetime.now(timezone.utc)
         job = ScheduledJob(
@@ -961,6 +1005,7 @@ def create_app(
             trigger_args=trigger_args,
             kwargs={
                 "topic_name": topic.title,
+                "user_id": user.id,
             },
             status="active" if request.enabled else "paused",
             name=f"Refresh topic: {topic.title}",
@@ -970,6 +1015,7 @@ def create_app(
                 "topic_id": topic.id,
                 "topic_title": topic.title,
                 "topic_filename": topic.filename,
+                "user_id": user.id,
             },
             created_at=now,
             updated_at=now,
@@ -977,41 +1023,51 @@ def create_app(
         return _scheduler_job_response(app.state.scheduler_service.add_job(job))
 
     @app.get("/api/topics/{topic_id}/schedule", response_model=SchedulerJobResponse | None)
-    def get_topic_refresh_schedule(topic_id: str):
-        path = _topic_path(topic_id)
+    def get_topic_refresh_schedule(topic_id: str, user: AuthUser = Depends(current_user)):
+        try:
+            record = _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
         job = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
+        if job is not None and not _job_belongs_to_user(job, user.id):
+            raise HTTPException(status_code=404, detail="Scheduled job not found")
         return _scheduler_job_response(job) if job is not None else None
 
     @app.post("/api/scheduler/jobs/{job_id}/pause", response_model=SchedulerJobResponse)
-    def pause_scheduler_job(job_id: str) -> SchedulerJobResponse:
+    def pause_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> SchedulerJobResponse:
         try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             job = app.state.scheduler_service.pause_job(job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
         return _scheduler_job_response(job)
 
     @app.post("/api/scheduler/jobs/{job_id}/resume", response_model=SchedulerJobResponse)
-    def resume_scheduler_job(job_id: str) -> SchedulerJobResponse:
+    def resume_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> SchedulerJobResponse:
         try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             job = app.state.scheduler_service.resume_job(job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
         return _scheduler_job_response(job)
 
     @app.post("/api/scheduler/jobs/{job_id}/run", response_model=JobRunResponse)
-    async def run_scheduler_job(job_id: str) -> JobRunResponse:
+    async def run_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> JobRunResponse:
         try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             run = await app.state.scheduler_service.run_job_now(job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
         return _job_run_response(run)
 
     @app.get("/api/scheduler/jobs/{job_id}/runs", response_model=JobRunListResponse)
-    def list_scheduler_job_runs(job_id: str) -> JobRunListResponse:
-        jobs = {job.id for job in app.state.scheduler_service.list_jobs()}
-        if job_id not in jobs:
+    def list_scheduler_job_runs(job_id: str, user: AuthUser = Depends(current_user)) -> JobRunListResponse:
+        try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
+        except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found")
         return JobRunListResponse(
             runs=[_job_run_response(run) for run in app.state.scheduler_service.list_runs(job_id)]

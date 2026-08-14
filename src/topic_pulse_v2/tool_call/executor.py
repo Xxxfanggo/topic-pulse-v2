@@ -47,8 +47,9 @@ class ToolExecutor:
         started = perf_counter()
         try:
             spec = self._registry.get(request.name)
-            self._validate_arguments(spec.handler, request.arguments)
-            value = spec.handler(**request.arguments)
+            arguments = self._arguments_with_context(spec.handler, request.arguments, request.metadata)
+            self._validate_arguments(spec.handler, arguments)
+            value = spec.handler(**arguments)
             if inspect.isawaitable(value):
                 value = self._run_awaitable(value)
             return ToolCallResult(
@@ -78,6 +79,20 @@ class ToolExecutor:
         signature.bind(**arguments)
 
     @staticmethod
+    def _arguments_with_context(
+        handler: Any,
+        arguments: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        signature = inspect.signature(handler)
+        merged = dict(arguments)
+        for key in ("user_id",):
+            if key in merged or key not in metadata or key not in signature.parameters:
+                continue
+            merged[key] = metadata[key]
+        return merged
+
+    @staticmethod
     def _run_awaitable(awaitable: Any) -> Any:
         try:
             asyncio.get_running_loop()
@@ -102,8 +117,9 @@ class ToolExecutor:
         started = perf_counter()
         try:
             spec = self._registry.get(request.name)
-            self._validate_arguments(spec.handler, request.arguments)
-            value = spec.handler(**request.arguments)
+            arguments = self._arguments_with_context(spec.handler, request.arguments, request.metadata)
+            self._validate_arguments(spec.handler, arguments)
+            value = spec.handler(**arguments)
             if inspect.isawaitable(value):
                 value = await value
             return ToolCallResult(
