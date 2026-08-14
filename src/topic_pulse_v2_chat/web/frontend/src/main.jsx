@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
-import { Button, ConfigProvider, Flex, Layout, Space, Typography, theme } from 'antd';
-import { ExportOutlined, LoginOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Space, Typography, theme } from 'antd';
+import { ExportOutlined, LoginOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import AppSidebar from './components/AppSidebar.jsx';
 import ChatComposer from './components/ChatComposer.jsx';
 import EmptyChatCanvas from './components/EmptyChatCanvas.jsx';
@@ -13,18 +13,155 @@ import TopicDetailPage from './pages/TopicDetailPage.jsx';
 import TopicListPage from './pages/TopicListPage.jsx';
 import {
   createTopicSchedule,
+  authorizedFetch,
+  clearAuthSession,
+  getCurrentUser,
   getSchedulerJobRuns,
+  getStoredAuthUser,
   getTopicSchedule,
+  loginWithEmail,
   pauseSchedulerJob,
   readApiResponse,
+  requestRegistrationCode,
   resumeSchedulerJob,
   runSchedulerJob,
+  setAuthSession,
+  verifyRegistration,
 } from './utils/api.js';
-import { getOrCreateUserId, mergeAgentStep } from './utils/chat.js';
+import { mergeAgentStep } from './utils/chat.js';
 import './styles.css';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
+
+function AuthPage({ onAuthenticated }) {
+  const [mode, setMode] = useState('login');
+  const [emailForCode, setEmailForCode] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function submitLogin(values) {
+    setLoading(true);
+    setError('');
+    try {
+      const payload = await loginWithEmail(values);
+      setAuthSession(payload);
+      onAuthenticated(payload.user);
+    } catch (nextError) {
+      setError(nextError.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function requestCode(values) {
+    setLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      await requestRegistrationCode(values.email);
+      setEmailForCode(values.email);
+      setCodeSent(true);
+      setMessage('Verification code sent. Check your email, then complete registration.');
+    } catch (nextError) {
+      setError(nextError.message || 'Verification code request failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitRegistration(values) {
+    setLoading(true);
+    setError('');
+    try {
+      const payload = await verifyRegistration({
+        email: emailForCode,
+        code: values.code,
+        password: values.password,
+      });
+      setAuthSession(payload);
+      onAuthenticated(payload.user);
+    } catch (nextError) {
+      setError(nextError.message || 'Registration failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="authShell">
+      <Card className="authCard">
+        <Space direction="vertical" size={18} className="authStack">
+          <Flex justify="space-between" align="center">
+            <div>
+              <Typography.Title level={3}>Topic Pulse</Typography.Title>
+              <Text type="secondary">{mode === 'login' ? 'Sign in with email' : 'Create your account'}</Text>
+            </div>
+            <Button type="text" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+              {mode === 'login' ? 'Register' : 'Login'}
+            </Button>
+          </Flex>
+
+          {error && <Alert type="error" message={error} showIcon />}
+          {message && <Alert type="success" message={message} showIcon />}
+
+          {mode === 'login' ? (
+            <Form layout="vertical" onFinish={submitLogin}>
+              <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
+                <Input autoComplete="email" />
+              </Form.Item>
+              <Form.Item name="password" label="Password" rules={[{ required: true }]}>
+                <Input.Password autoComplete="current-password" />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" loading={loading} block icon={<LoginOutlined />}>
+                Login
+              </Button>
+            </Form>
+          ) : (
+            <Space direction="vertical" size={14} className="authStack">
+              <Form layout="vertical" onFinish={requestCode} initialValues={{ email: emailForCode }}>
+                <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
+                  <Input autoComplete="email" disabled={codeSent} />
+                </Form.Item>
+                {codeSent ? (
+                  <Button
+                    onClick={() => {
+                      setCodeSent(false);
+                      setEmailForCode('');
+                      setMessage('');
+                    }}
+                    block
+                  >
+                    Change email
+                  </Button>
+                ) : (
+                  <Button htmlType="submit" loading={loading} block>
+                    Send verification code
+                  </Button>
+                )}
+              </Form>
+              {codeSent && (
+                <Form layout="vertical" onFinish={submitRegistration}>
+                  <Form.Item name="code" label="Verification code" rules={[{ required: true }]}>
+                    <Input inputMode="numeric" />
+                  </Form.Item>
+                  <Form.Item name="password" label="Password" rules={[{ required: true, min: 8 }]}>
+                    <Input.Password autoComplete="new-password" />
+                  </Form.Item>
+                  <Button type="primary" htmlType="submit" loading={loading} block>
+                    Create account
+                  </Button>
+                </Form>
+              )}
+            </Space>
+          )}
+        </Space>
+      </Card>
+    </div>
+  );
+}
 
 function TopicPulseApp() {
   const [collapsed, setCollapsed] = useState(false);
@@ -48,7 +185,8 @@ function TopicPulseApp() {
   const [topicScheduleLoading, setTopicScheduleLoading] = useState(false);
   const [topicScheduleActionLoading, setTopicScheduleActionLoading] = useState('');
   const [topicScheduleError, setTopicScheduleError] = useState('');
-  const [userId] = useState(getOrCreateUserId);
+  const [authUser, setAuthUser] = useState(getStoredAuthUser);
+  const [authChecking, setAuthChecking] = useState(true);
   const inputRef = useRef(null);
   const conversationPaneRef = useRef(null);
   const sessionLoadTokenRef = useRef(0);
@@ -68,6 +206,30 @@ function TopicPulseApp() {
     return latest?.content || '等待新的分析任务';
   }, [messages]);
 
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const user = await getCurrentUser();
+        setAuthUser(user);
+      } catch {
+        clearAuthSession();
+        setAuthUser(null);
+      } finally {
+        setAuthChecking(false);
+      }
+    }
+    checkAuth();
+  }, []);
+
+  function logout() {
+    clearAuthSession();
+    setAuthUser(null);
+    setMessages([]);
+    setSessionId(null);
+    setChatSessions([]);
+    navigate('/chat', { replace: true });
+  }
+
   function createNewChat() {
     sessionLoadTokenRef.current += 1;
     creatingNewChatRef.current = true;
@@ -83,7 +245,7 @@ function TopicPulseApp() {
     setSessionsLoading(true);
     setSessionsError('');
     try {
-      const response = await fetch('/api/sessions');
+      const response = await authorizedFetch('/api/sessions');
       const data = await readApiResponse(response, '最近会话加载失败');
       setChatSessions(data.sessions || []);
     } catch (error) {
@@ -99,7 +261,7 @@ function TopicPulseApp() {
     sessionLoadTokenRef.current = loadToken;
     setSessionsError('');
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(nextSessionId)}`);
+      const response = await authorizedFetch(`/api/sessions/${encodeURIComponent(nextSessionId)}`);
       const data = await readApiResponse(response, '会话加载失败');
       if (loadToken !== sessionLoadTokenRef.current) {
         return;
@@ -140,7 +302,7 @@ function TopicPulseApp() {
     setTopicsLoading(true);
     setTopicsError('');
     try {
-      const response = await fetch('/api/topics');
+      const response = await authorizedFetch('/api/topics');
       const data = await readApiResponse(response, '话题列表加载失败');
       setTopics(data.topics || []);
     } catch (error) {
@@ -155,7 +317,7 @@ function TopicPulseApp() {
     setTopicDetailLoading(true);
     setTopicsError('');
     try {
-      const response = await fetch(`/api/topics/${encodeURIComponent(topicId)}`);
+      const response = await authorizedFetch(`/api/topics/${encodeURIComponent(topicId)}`);
       const data = await readApiResponse(response, '话题详情加载失败');
       setSelectedTopic(data);
     } catch (error) {
@@ -254,6 +416,9 @@ function TopicPulseApp() {
   }
 
   useEffect(() => {
+    if (authChecking || !authUser) {
+      return;
+    }
     if (location.pathname === '/') {
       navigate('/chat', { replace: true });
       return;
@@ -261,11 +426,14 @@ function TopicPulseApp() {
     if (!location.pathname.startsWith('/chat') && !location.pathname.startsWith('/topics')) {
       navigate('/chat', { replace: true });
     }
-  }, [location.pathname, navigate]);
+  }, [authChecking, authUser, location.pathname, navigate]);
 
   useEffect(() => {
+    if (authChecking || !authUser) {
+      return;
+    }
     loadChatSessions();
-  }, []);
+  }, [authChecking, authUser]);
 
   useEffect(() => {
     if (location.pathname === '/chat') {
@@ -284,10 +452,13 @@ function TopicPulseApp() {
   }, [activeView, routedSessionId, sessionId]);
 
   useEffect(() => {
+    if (authChecking || !authUser) {
+      return;
+    }
     if (activeView === 'topics') {
       loadTopics();
     }
-  }, [activeView]);
+  }, [authChecking, authUser, activeView]);
 
   useEffect(() => {
     if (activeView !== 'topics') {
@@ -366,12 +537,11 @@ function TopicPulseApp() {
     };
 
     try {
-      const response = await fetch('/api/chat/stream', {
+      const response = await authorizedFetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
-          user_id: userId,
           session_id: sessionId,
         }),
       });
@@ -475,6 +645,24 @@ function TopicPulseApp() {
     }
   }
 
+  if (authChecking) {
+    return (
+      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
+        <div className="authShell">
+          <Text type="secondary">Checking session...</Text>
+        </div>
+      </ConfigProvider>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
+        <AuthPage onAuthenticated={setAuthUser} />
+      </ConfigProvider>
+    );
+  }
+
   return (
     <ConfigProvider
       theme={{
@@ -515,7 +703,7 @@ function TopicPulseApp() {
           routedSessionId={routedSessionId}
           sessionsError={sessionsError}
           sessionsLoading={sessionsLoading}
-          userId={userId}
+          userId={authUser.email}
         />
 
         <Layout className="workspace">
@@ -538,8 +726,8 @@ function TopicPulseApp() {
             </Flex>
             <Space>
               <Button icon={<ExportOutlined />}>导出</Button>
-              <Button type="primary" icon={<LoginOutlined />}>
-                登录
+              <Button icon={<LogoutOutlined />} onClick={logout}>
+                Logout
               </Button>
             </Space>
           </Header>

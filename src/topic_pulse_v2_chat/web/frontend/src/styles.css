@@ -1514,3 +1514,19 @@ body {
     display: none;
   }
 }
+.authShell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f7f8fc;
+  padding: 24px;
+}
+
+.authCard {
+  width: min(420px, 100%);
+}
+
+.authStack {
+  width: 100%;
+}

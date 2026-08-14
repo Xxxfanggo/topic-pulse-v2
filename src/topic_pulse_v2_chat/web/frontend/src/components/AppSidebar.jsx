@@ -93,7 +93,7 @@ export default function AppSidebar({
             <div>
               <Text strong>访客模式</Text>
               <Text type="secondary" className="blockText">
-                {userId.slice(0, 8)}
+                {userId}
               </Text>
             </div>
           </Flex>

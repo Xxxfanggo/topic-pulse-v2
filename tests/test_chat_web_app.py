@@ -9,10 +9,15 @@ from types import SimpleNamespace
 try:
     from fastapi.testclient import TestClient
 
-    from topic_pulse_v2_chat.web import create_app
+    from topic_pulse_v2_chat.web import create_app as create_web_app
 except ModuleNotFoundError:
     TestClient = None
-    create_app = None
+    create_web_app = None
+
+
+def create_app(*args, **kwargs):
+    kwargs.setdefault("auth_required", False)
+    return create_web_app(*args, **kwargs)
 
 
 class FakeChatRuntime:

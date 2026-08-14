@@ -209,7 +209,7 @@ class ReActContextManager:
             return ""
         if cls.approx_token_count(text) <= token_budget:
             return text
-                                        trimmed = cls._text_within_token_budget(text, token_budget).rstrip()
+        trimmed = cls._text_within_token_budget(text, token_budget).rstrip()
         return f"{trimmed}\n\n[content trimmed to fit budget]"
 
     @staticmethod

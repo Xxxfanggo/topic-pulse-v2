@@ -12,16 +12,24 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid5, NAMESPACE_URL
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from topic_pulse_v2.auth import AuthService, AuthUser
+from topic_pulse_v2.config import load_env_file
 from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage
 from topic_pulse_v2_chat.web.schemas import (
+    AuthLoginRequest,
+    AuthMessageResponse,
+    AuthRegisterVerifyRequest,
+    AuthRequestCodeRequest,
+    AuthTokenResponse,
+    AuthUserResponse,
     ChatRequest,
     ChatResponse,
     CreateTopicRefreshJobRequest,
@@ -44,6 +52,7 @@ FRONTEND_DIST_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
 TOPICS_DIR = Path(__file__).resolve().parents[3] / "data" / "topics"
 SESSION_DATA_DIR = Path(__file__).resolve().parents[2] / "topic_pulse_v2" / "session" / "data"
 logger = logging.getLogger(__name__)
+load_env_file()
 
 
 class ChatRuntime(Protocol):
@@ -81,6 +90,23 @@ class SchedulerRuntime(Protocol):
         ...
 
     def list_runs(self, job_id: str | None = None, *, limit: int = 50):
+        ...
+
+
+class AuthRuntime(Protocol):
+    def initialize(self) -> None:
+        ...
+
+    def request_registration_code(self, email: str) -> None:
+        ...
+
+    def register_with_code(self, *, email: str, code: str, password: str):
+        ...
+
+    def login(self, *, email: str, password: str):
+        ...
+
+    def authenticate_token(self, token: str) -> AuthUser:
         ...
 
 
@@ -522,6 +548,13 @@ def _session_store() -> MarkdownSessionHistoryStore:
     return MarkdownSessionHistoryStore(SESSION_DATA_DIR)
 
 
+def _auth_token_response(user: AuthUser, token: str) -> AuthTokenResponse:
+    return AuthTokenResponse(
+        access_token=token,
+        user=AuthUserResponse(id=user.id, email=user.email),
+    )
+
+
 
 def _create_scheduler_service(chat_runtime: ChatRuntime | None = None) -> SchedulerService:
     registry = ScheduledTaskRegistry()
@@ -622,6 +655,8 @@ def _session_summary(path: Path, store: MarkdownSessionHistoryStore) -> SessionS
 def create_app(
     chat_runtime: ChatRuntime | None = None,
     scheduler_service: SchedulerRuntime | None = None,
+    auth_service: AuthRuntime | None = None,
+    auth_required: bool = True,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -639,6 +674,9 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.chat_runtime = chat_runtime or ReactChatService()
+    app.state.auth_service = auth_service or (AuthService() if auth_required else None)
+    if app.state.auth_service is not None:
+        app.state.auth_service.initialize()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -647,16 +685,65 @@ def create_app(
         allow_headers=["*"],
     )
 
+    def current_user(authorization: str | None = Header(default=None)) -> AuthUser:
+        if not auth_required:
+            return AuthUser(id="anonymous-user-1", email="anonymous@example.test", status="active")
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        try:
+            return app.state.auth_service.authenticate_token(token)
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+
     @app.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse()
 
+    @app.post("/api/auth/register/request-code", response_model=AuthMessageResponse)
+    def request_registration_code(request: AuthRequestCodeRequest) -> AuthMessageResponse:
+        if app.state.auth_service is None:
+            raise HTTPException(status_code=404, detail="Auth is disabled")
+        try:
+            app.state.auth_service.request_registration_code(request.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return AuthMessageResponse()
+
+    @app.post("/api/auth/register/verify", response_model=AuthTokenResponse)
+    def verify_registration(request: AuthRegisterVerifyRequest) -> AuthTokenResponse:
+        if app.state.auth_service is None:
+            raise HTTPException(status_code=404, detail="Auth is disabled")
+        try:
+            user, token = app.state.auth_service.register_with_code(
+                email=request.email,
+                code=request.code,
+                password=request.password,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _auth_token_response(user, token)
+
+    @app.post("/api/auth/login", response_model=AuthTokenResponse)
+    def login(request: AuthLoginRequest) -> AuthTokenResponse:
+        if app.state.auth_service is None:
+            raise HTTPException(status_code=404, detail="Auth is disabled")
+        try:
+            user, token = app.state.auth_service.login(email=request.email, password=request.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail="Invalid email or password") from exc
+        return _auth_token_response(user, token)
+
+    @app.get("/api/auth/me", response_model=AuthUserResponse)
+    def me(user: AuthUser = Depends(current_user)) -> AuthUserResponse:
+        return AuthUserResponse(id=user.id, email=user.email)
+
     @app.post("/api/chat", response_model=ChatResponse)
-    async def chat(request: ChatRequest) -> ChatResponse:
+    async def chat(request: ChatRequest, user: AuthUser = Depends(current_user)) -> ChatResponse:
         try:
             result = await run_in_threadpool(
                 app.state.chat_runtime.chat,
-                user_id=request.user_id,
+                user_id=user.id,
                 message=request.message,
                 session_id=request.session_id,
                 metadata={
@@ -674,7 +761,7 @@ def create_app(
         return ChatResponse(
             answer=_display_answer_for_topic_update(result.answer, topic_update),
             session_id=result.session_id or "",
-            user_id=request.user_id,
+            user_id=user.id,
             completed=result.completed,
             query_key=_answer_query_key(result.answer),
             reference_data=_answer_reference_data(result.answer),
@@ -683,7 +770,7 @@ def create_app(
         )
 
     @app.post("/api/chat/stream")
-    async def stream_chat(request: ChatRequest) -> StreamingResponse:
+    async def stream_chat(request: ChatRequest, user: AuthUser = Depends(current_user)) -> StreamingResponse:
         async def event_generator():
             yield _stream_event("status", text="正在分析问题")
             result = None
@@ -696,7 +783,7 @@ def create_app(
                 }
                 if hasattr(app.state.chat_runtime, "chat_stream"):
                     iterator = app.state.chat_runtime.chat_stream(
-                        user_id=request.user_id,
+                        user_id=user.id,
                         message=request.message,
                         session_id=request.session_id,
                         metadata=metadata,
@@ -770,7 +857,7 @@ def create_app(
                 else:
                     result = await run_in_threadpool(
                         app.state.chat_runtime.chat,
-                        user_id=request.user_id,
+                        user_id=user.id,
                         message=request.message,
                         session_id=request.session_id,
                         metadata=metadata,
@@ -814,7 +901,7 @@ def create_app(
             yield _stream_event(
                 "done",
                 session_id=result.session_id or "",
-                user_id=request.user_id,
+                user_id=user.id,
                 completed=result.completed,
                 query_key=query_key,
                 reference_data=reference_data,
@@ -931,7 +1018,7 @@ def create_app(
         )
 
     @app.get("/api/sessions", response_model=SessionListResponse)
-    def list_sessions() -> SessionListResponse:
+    def list_sessions(user: AuthUser = Depends(current_user)) -> SessionListResponse:
         store = _session_store()
         if not SESSION_DATA_DIR.exists():
             return SessionListResponse()
@@ -949,7 +1036,7 @@ def create_app(
         return SessionListResponse(sessions=sessions)
 
     @app.get("/api/sessions/{session_id}", response_model=SessionDetailResponse)
-    def get_session(session_id: str) -> SessionDetailResponse:
+    def get_session(session_id: str, user: AuthUser = Depends(current_user)) -> SessionDetailResponse:
         store = _session_store()
         path = store.path_for(session_id)
         if not path.exists() or not path.is_file():

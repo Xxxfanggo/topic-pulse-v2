@@ -25,7 +25,7 @@ class SessionChatMessage(ChatMessage):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="User input message.")
-    user_id: str = Field(min_length=1, description="Anonymous or logged-in user id.")
+    user_id: str | None = Field(default=None, description="Deprecated. User id is derived from the auth token.")
     session_id: str | None = Field(default=None, description="Optional chat session id.")
     history: list[ChatMessage] = Field(default_factory=list, description="Recent chat history.")
 
@@ -116,3 +116,33 @@ class JobRunResponse(BaseModel):
 
 class JobRunListResponse(BaseModel):
     runs: list[JobRunResponse] = Field(default_factory=list)
+
+
+class AuthRequestCodeRequest(BaseModel):
+    email: str = Field(min_length=3, description="Email address to verify.")
+
+
+class AuthRegisterVerifyRequest(BaseModel):
+    email: str = Field(min_length=3, description="Email address to register.")
+    code: str = Field(min_length=4, max_length=12, description="Email verification code.")
+    password: str = Field(min_length=8, description="Password.")
+
+
+class AuthLoginRequest(BaseModel):
+    email: str = Field(min_length=3, description="Email address.")
+    password: str = Field(min_length=1, description="Password.")
+
+
+class AuthUserResponse(BaseModel):
+    id: str
+    email: str
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: AuthUserResponse
+
+
+class AuthMessageResponse(BaseModel):
+    status: str = "ok"
