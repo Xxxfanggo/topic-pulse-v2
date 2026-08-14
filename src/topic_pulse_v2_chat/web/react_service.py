@@ -10,7 +10,7 @@ from typing import Any
 from topic_pulse_v2.llm_call import LLMClient, MiniMaxLLMProvider
 from topic_pulse_v2.memory import InMemoryStore
 from topic_pulse_v2.process import ReActAgent, ReActConfig, ReActResult, ReActStreamEvent
-from topic_pulse_v2.session import SessionManager
+from topic_pulse_v2.session import SessionManager, SQLiteSessionStore
 from topic_pulse_v2.tool_register import ToolRegistry
 
 
@@ -24,7 +24,7 @@ class ReactChatService:
             default_provider="minimax",
         )
         self._memory = InMemoryStore()
-        self._session_manager = SessionManager()
+        self._session_manager = SessionManager(session_store=SQLiteSessionStore())
         self._tool_registry = ToolRegistry()
         self._config = ReActConfig(max_steps=20)
         self._agent = ReActAgent(

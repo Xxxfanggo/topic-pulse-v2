@@ -726,6 +726,7 @@ class ReActAgent:
             session = self._session_manager.ensure(
                 session_id,
                 context={"user_id": user_id},
+                user_id=user_id,
             )
             if session.status in {
                 SessionStatus.COMPLETED,
@@ -735,7 +736,7 @@ class ReActAgent:
                 self._session_manager.transition(session_id, SessionStatus.ACTIVE)
             self._session_manager.set_context(session_id, "user_id", user_id)
             return session_id
-        session = self._session_manager.create(context={"user_id": user_id})
+        session = self._session_manager.create(context={"user_id": user_id}, user_id=user_id)
         return session.id
 
     def _finish_session(self, session_id: str | None, completed: bool) -> None:

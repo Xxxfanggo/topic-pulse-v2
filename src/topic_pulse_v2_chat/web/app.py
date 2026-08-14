@@ -22,7 +22,7 @@ from topic_pulse_v2.auth import AuthService, AuthUser
 from topic_pulse_v2.config import load_env_file
 from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
-from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage
+from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage, SQLiteSessionStore
 from topic_pulse_v2.topics import SQLiteTopicStore, TopicRecord
 from topic_pulse_v2_chat.web.schemas import (
     AuthLoginRequest,
@@ -570,8 +570,12 @@ def _extract_json_text_field(content: str, key: str, following_keys: tuple[str, 
         )
 
 
-def _session_store() -> MarkdownSessionHistoryStore:
-    return MarkdownSessionHistoryStore(SESSION_DATA_DIR)
+def _session_index_store() -> SQLiteSessionStore:
+    return SQLiteSessionStore(sessions_dir=SESSION_DATA_DIR)
+
+
+def _session_store(session_store: SQLiteSessionStore | None = None) -> MarkdownSessionHistoryStore:
+    return MarkdownSessionHistoryStore(SESSION_DATA_DIR, session_store=session_store)
 
 
 def _auth_token_response(user: AuthUser, token: str) -> AuthTokenResponse:
@@ -666,8 +670,8 @@ def _is_hidden_session(messages: list[SessionMessage]) -> bool:
     return False
 
 
-def _session_summary(path: Path, store: MarkdownSessionHistoryStore) -> SessionSummary:
-    messages = store.list(path.stem)
+def _session_summary(path: Path, store: MarkdownSessionHistoryStore, messages: list[SessionMessage] | None = None) -> SessionSummary:
+    messages = messages if messages is not None else store.list(path.stem)
     stat = path.stat()
     return SessionSummary(
         id=path.stem,
@@ -1075,32 +1079,34 @@ def create_app(
 
     @app.get("/api/sessions", response_model=SessionListResponse)
     def list_sessions(user: AuthUser = Depends(current_user)) -> SessionListResponse:
-        store = _session_store()
-        if not SESSION_DATA_DIR.exists():
-            return SessionListResponse()
-        paths = [
-            path
-            for path in SESSION_DATA_DIR.glob("*.md")
-            if path.is_file() and not path.name.startswith(".")
-        ]
+        index_store = _session_index_store()
+        store = _session_store(index_store)
         sessions = []
-        for path in sorted(paths, key=lambda item: item.stat().st_mtime, reverse=True):
-            messages = store.list(path.stem)
+        for record in index_store.list_sessions(user_id=user.id):
+            path = Path(record.markdown_path)
+            if not path.exists() or not path.is_file():
+                continue
+            messages = store.list(record.id, user_id=user.id)
             if _is_hidden_session(messages):
                 continue
-            sessions.append(_session_summary(path, store))
+            sessions.append(_session_summary(path, store, messages))
         return SessionListResponse(sessions=sessions)
 
     @app.get("/api/sessions/{session_id}", response_model=SessionDetailResponse)
     def get_session(session_id: str, user: AuthUser = Depends(current_user)) -> SessionDetailResponse:
-        store = _session_store()
-        path = store.path_for(session_id)
+        index_store = _session_index_store()
+        store = _session_store(index_store)
+        try:
+            record = index_store.require_session(user_id=user.id, session_id=session_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
-        messages = store.list(session_id)
+        messages = store.list(session_id, user_id=user.id)
         if _is_hidden_session(messages):
             raise HTTPException(status_code=404, detail="Session not found")
-        summary = _session_summary(path, store)
+        summary = _session_summary(path, store, messages)
         return SessionDetailResponse(
             **_model_data(summary),
             messages=_session_messages(messages),

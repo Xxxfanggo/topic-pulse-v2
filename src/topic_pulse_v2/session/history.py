@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .state import utc_now
+from .store import SQLiteSessionStore
 
 
 @dataclass(slots=True)
@@ -27,20 +28,20 @@ class SessionHistoryStore(ABC):
     """Storage interface for session conversation history."""
 
     @abstractmethod
-    def append(self, session_id: str, message: SessionMessage) -> None:
+    def append(self, session_id: str, message: SessionMessage, *, user_id: str | None = None) -> None:
         """Append one message to a session history."""
 
-    def append_many(self, session_id: str, messages: list[SessionMessage]) -> None:
+    def append_many(self, session_id: str, messages: list[SessionMessage], *, user_id: str | None = None) -> None:
         """Append multiple messages to a session history."""
         for message in messages:
-            self.append(session_id, message)
+            self.append(session_id, message, user_id=user_id)
 
     @abstractmethod
-    def list(self, session_id: str, limit: int | None = None) -> list[SessionMessage]:
+    def list(self, session_id: str, limit: int | None = None, *, user_id: str | None = None) -> list[SessionMessage]:
         """Read messages for a session, oldest first."""
 
     @abstractmethod
-    def delete(self, session_id: str) -> None:
+    def delete(self, session_id: str, *, user_id: str | None = None) -> None:
         """Delete a session history."""
 
 
@@ -54,16 +55,17 @@ class MarkdownSessionHistoryStore(SessionHistoryStore):
         flags=re.DOTALL,
     )
 
-    def __init__(self, root_dir: str | Path | None = None) -> None:
+    def __init__(self, root_dir: str | Path | None = None, *, session_store: SQLiteSessionStore | None = None) -> None:
         self._root_dir = Path(root_dir) if root_dir else Path(__file__).parent / "data"
         self._root_dir.mkdir(parents=True, exist_ok=True)
+        self._session_store = session_store
 
     @property
     def root_dir(self) -> Path:
         return self._root_dir
 
-    def append(self, session_id: str, message: SessionMessage) -> None:
-        path = self.path_for(session_id)
+    def append(self, session_id: str, message: SessionMessage, *, user_id: str | None = None) -> None:
+        path = self.path_for(session_id, user_id=user_id)
         if not path.exists():
             path.write_text(
                 f"# Session {session_id}\n\n## Messages\n\n",
@@ -71,9 +73,10 @@ class MarkdownSessionHistoryStore(SessionHistoryStore):
             )
         with path.open("a", encoding="utf-8", newline="\n") as file:
             file.write(self._format_message(message))
+        self._touch_session(session_id)
 
-    def list(self, session_id: str, limit: int | None = None) -> list[SessionMessage]:
-        path = self.path_for(session_id)
+    def list(self, session_id: str, limit: int | None = None, *, user_id: str | None = None) -> list[SessionMessage]:
+        path = self.path_for(session_id, user_id=user_id)
         if not path.exists():
             return []
 
@@ -97,18 +100,28 @@ class MarkdownSessionHistoryStore(SessionHistoryStore):
             return messages[-limit:]
         return messages
 
-    def delete(self, session_id: str) -> None:
-        path = self.path_for(session_id)
+    def delete(self, session_id: str, *, user_id: str | None = None) -> None:
+        path = self.path_for(session_id, user_id=user_id)
         if path.exists():
             path.unlink()
 
-    def path_for(self, session_id: str) -> Path:
+    def path_for(self, session_id: str, *, user_id: str | None = None) -> Path:
+        if user_id and self._session_store is not None:
+            record = self._session_store.create_or_get_session(
+                user_id=user_id,
+                session_id=session_id,
+            )
+            return Path(record.markdown_path).resolve()
         filename = f"{self._safe_session_id(session_id)}.md"
         path = (self._root_dir / filename).resolve()
         root = self._root_dir.resolve()
         if root not in path.parents and path != root:
             raise ValueError(f"Invalid session_id path: {session_id}")
         return path
+
+    def _touch_session(self, session_id: str) -> None:
+        if self._session_store is not None:
+            self._session_store.touch_session(session_id)
 
     @staticmethod
     def _format_message(message: SessionMessage) -> str:

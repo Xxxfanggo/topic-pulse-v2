@@ -10,6 +10,7 @@ try:
     from fastapi.testclient import TestClient
 
     from topic_pulse_v2.auth import AuthService, JwtCodec
+    from topic_pulse_v2.session import SQLiteSessionStore
     from topic_pulse_v2.topics import SQLiteTopicStore
     from topic_pulse_v2_chat.web import create_app
 except ModuleNotFoundError:
@@ -154,6 +155,67 @@ class WebAuthApiTests(unittest.TestCase):
             self.assertEqual([item["id"] for item in topics.json()["topics"]], [topic_one.id])
             self.assertEqual(own_detail.status_code, 200)
             self.assertIn("User one topic.", own_detail.json()["content"])
+            self.assertEqual(other_detail.status_code, 404)
+
+    def test_sessions_are_scoped_to_authenticated_user(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sender = RecordingSender()
+            auth = self._auth_service(root, sender)
+            session_store = SQLiteSessionStore(db_path=root / "sessions.sqlite3", sessions_dir=root / "sessions")
+            web_app_module = importlib.import_module("topic_pulse_v2_chat.web.app")
+
+            client = TestClient(create_app(auth_service=auth, chat_runtime=FakeChatRuntime()))
+            client.post("/api/auth/register/request-code", json={"email": "one@example.com"})
+            user_one = client.post(
+                "/api/auth/register/verify",
+                json={"email": "one@example.com", "code": sender.messages[-1]["code"], "password": "password-123"},
+            ).json()
+            client.post("/api/auth/register/request-code", json={"email": "two@example.com"})
+            user_two = client.post(
+                "/api/auth/register/verify",
+                json={"email": "two@example.com", "code": sender.messages[-1]["code"], "password": "password-123"},
+            ).json()
+
+            session_one = session_store.create_or_get_session(user_id=user_one["user"]["id"], session_id="session-one")
+            session_two = session_store.create_or_get_session(user_id=user_two["user"]["id"], session_id="session-two")
+            Path(session_one.markdown_path).write_text(
+                "# Session session-one\n\n## Messages\n\n"
+                "<!-- message\n"
+                '{"role": "user", "created_at": "2026-08-05T10:00:00+00:00", "metadata": {"type": "user_input"}}\n'
+                "-->\n"
+                "hello from one\n"
+                "<!-- /message -->\n\n",
+                encoding="utf-8",
+            )
+            Path(session_two.markdown_path).write_text(
+                "# Session session-two\n\n## Messages\n\n"
+                "<!-- message\n"
+                '{"role": "user", "created_at": "2026-08-05T10:00:00+00:00", "metadata": {"type": "user_input"}}\n'
+                "-->\n"
+                "hello from two\n"
+                "<!-- /message -->\n\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(web_app_module, "_session_index_store", return_value=session_store):
+                sessions = client.get(
+                    "/api/sessions",
+                    headers={"Authorization": f"Bearer {user_one['access_token']}"},
+                )
+                own_detail = client.get(
+                    "/api/sessions/session-one",
+                    headers={"Authorization": f"Bearer {user_one['access_token']}"},
+                )
+                other_detail = client.get(
+                    "/api/sessions/session-two",
+                    headers={"Authorization": f"Bearer {user_one['access_token']}"},
+                )
+
+            self.assertEqual(sessions.status_code, 200)
+            self.assertEqual([item["id"] for item in sessions.json()["sessions"]], ["session-one"])
+            self.assertEqual(own_detail.status_code, 200)
+            self.assertEqual(own_detail.json()["messages"][0]["content"], "hello from one")
             self.assertEqual(other_detail.status_code, 404)
 
 

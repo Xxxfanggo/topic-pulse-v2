@@ -7,6 +7,7 @@ from .history import (
 )
 from .manager import InMemorySessionRepository, SessionManager, SessionRepository
 from .state import ALLOWED_TRANSITIONS, Session, SessionStatus
+from .store import SQLiteSessionStore, SessionRecord
 
 __all__ = [
     "ALLOWED_TRANSITIONS",
@@ -16,6 +17,8 @@ __all__ = [
     "SessionHistoryStore",
     "SessionManager",
     "SessionMessage",
+    "SessionRecord",
     "SessionRepository",
     "SessionStatus",
+    "SQLiteSessionStore",
 ]

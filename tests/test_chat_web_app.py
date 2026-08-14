@@ -10,6 +10,7 @@ from unittest.mock import patch
 try:
     from fastapi.testclient import TestClient
 
+    from topic_pulse_v2.session import SQLiteSessionStore
     from topic_pulse_v2.topics import SQLiteTopicStore
     from topic_pulse_v2_chat.web import create_app as create_web_app
 except ModuleNotFoundError:
@@ -506,7 +507,9 @@ class ChatWebAppTests(unittest.TestCase):
     def test_sessions_list_and_detail_from_markdown_history(self):
         with TemporaryDirectory() as temp_dir:
             sessions_dir = Path(temp_dir)
-            session_path = sessions_dir / "session-existing.md"
+            session_index = SQLiteSessionStore(db_path=sessions_dir / "topic_pulse.sqlite3", sessions_dir=sessions_dir)
+            session_record = session_index.create_or_get_session(user_id="anonymous-user-1", session_id="session-existing")
+            session_path = Path(session_record.markdown_path)
             session_path.write_text(
                 "# Session session-existing\n\n"
                 "## Messages\n\n"
@@ -538,9 +541,7 @@ class ChatWebAppTests(unittest.TestCase):
 
             web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
 
-            original_session_data_dir = web_app.SESSION_DATA_DIR
-            web_app.SESSION_DATA_DIR = sessions_dir
-            try:
+            with patch.object(web_app, "_session_index_store", return_value=session_index):
                 client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
 
                 sessions = client.get("/api/sessions")
@@ -555,13 +556,14 @@ class ChatWebAppTests(unittest.TestCase):
                 self.assertEqual(detail.json()["messages"][0]["content"], "hello")
                 self.assertEqual(detail.json()["messages"][1]["content"], "## Insight\n\n- Alpha")
                 self.assertTrue(detail.json()["messages"][1]["completed"])
-            finally:
-                web_app.SESSION_DATA_DIR = original_session_data_dir
 
     def test_sessions_api_hides_scheduler_sessions(self):
         with TemporaryDirectory() as temp_dir:
             sessions_dir = Path(temp_dir)
-            visible_path = sessions_dir / "session-visible.md"
+            session_index = SQLiteSessionStore(db_path=sessions_dir / "topic_pulse.sqlite3", sessions_dir=sessions_dir)
+            visible_record = session_index.create_or_get_session(user_id="anonymous-user-1", session_id="session-visible")
+            hidden_record = session_index.create_or_get_session(user_id="anonymous-user-1", session_id="session-scheduler")
+            visible_path = Path(visible_record.markdown_path)
             visible_path.write_text(
                 "# Session session-visible\n\n"
                 "## Messages\n\n"
@@ -572,7 +574,7 @@ class ChatWebAppTests(unittest.TestCase):
                 "<!-- /message -->\n\n",
                 encoding="utf-8",
             )
-            hidden_path = sessions_dir / "session-scheduler.md"
+            hidden_path = Path(hidden_record.markdown_path)
             hidden_path.write_text(
                 "# Session session-scheduler\n\n"
                 "## Messages\n\n"
@@ -586,9 +588,7 @@ class ChatWebAppTests(unittest.TestCase):
 
             web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
 
-            original_session_data_dir = web_app.SESSION_DATA_DIR
-            web_app.SESSION_DATA_DIR = sessions_dir
-            try:
+            with patch.object(web_app, "_session_index_store", return_value=session_index):
                 client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
 
                 sessions = client.get("/api/sessions")
@@ -600,8 +600,6 @@ class ChatWebAppTests(unittest.TestCase):
                     ["session-visible"],
                 )
                 self.assertEqual(hidden_detail.status_code, 404)
-            finally:
-                web_app.SESSION_DATA_DIR = original_session_data_dir
 
 
 if __name__ == "__main__":
