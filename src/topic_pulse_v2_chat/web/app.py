@@ -218,6 +218,37 @@ def _topic_refresh_job_id(topic_id: str) -> str:
     return f"topic-refresh-{uuid5(NAMESPACE_URL, f'topic-pulse/topic/{topic_id}')}"
 
 
+def _default_hotspot_refresh_job_id() -> str:
+    return "hotspot-refresh-weibo-hourly"
+
+
+def _ensure_default_hotspot_refresh_job(scheduler: SchedulerRuntime) -> None:
+    for job in scheduler.list_jobs():
+        metadata = job.metadata or {}
+        if metadata.get("type") == "hotspot_refresh" and metadata.get("provider") == "weibo":
+            return
+
+    now = datetime.now(timezone.utc)
+    scheduler.add_job(
+        ScheduledJob(
+            id=_default_hotspot_refresh_job_id(),
+            task_name="refresh_hotspots",
+            trigger="interval",
+            trigger_args={"hours": 1},
+            kwargs={"provider": "weibo"},
+            status="active",
+            name="Refresh Weibo hotspots hourly",
+            description="Refresh today's platform-level hot news ranking from Weibo.",
+            metadata={
+                "type": "hotspot_refresh",
+                "provider": "weibo",
+            },
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
 def _find_topic_refresh_job(
     scheduler: SchedulerRuntime,
     topic_id: str,
@@ -699,6 +730,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         app.state.scheduler_service = scheduler_service or _create_scheduler_service(app.state.chat_runtime)
         app.state.scheduler_service.start()
+        _ensure_default_hotspot_refresh_job(app.state.scheduler_service)
         try:
             yield
         finally:

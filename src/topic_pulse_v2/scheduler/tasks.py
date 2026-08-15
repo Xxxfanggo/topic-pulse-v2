@@ -126,12 +126,12 @@ def register_builtin_tasks(
         description="Refresh one tracked topic.",
         replace=True,
     )
-    registry.register(
-        "cleanup_trace_logs",
-        cleanup_trace_logs,
-        description="Clean scheduler or agent trace logs.",
-        replace=True,
-    )
+    # registry.register(
+    #     "cleanup_trace_logs",
+    #     cleanup_trace_logs,
+    #     description="Clean scheduler or agent trace logs.",
+    #     replace=True,
+    # )
     registry.register(
         "refresh_hotspots",
         lambda **kwargs: refresh_hotspots(
