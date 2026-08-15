@@ -185,10 +185,7 @@ def _with_runtime_kwargs(job: ScheduledJob) -> ScheduledJob:
         return job
 
     user_id = (job.metadata or {}).get("user_id")
-    if not user_id:
-        return job
-
-    kwargs["user_id"] = user_id
+    kwargs["user_id"] = user_id or "scheduler"
     return replace(job, kwargs=kwargs)
 
 

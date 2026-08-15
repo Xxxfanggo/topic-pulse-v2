@@ -11,6 +11,7 @@ from topic_pulse_v2.scheduler import (
     SQLiteSchedulerStore,
 )
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
+from topic_pulse_v2.process.hotspot_agent import HotspotRunResult
 
 
 class FakeRefreshChatRuntime:
@@ -34,6 +35,31 @@ class FakeRefreshChatRuntime:
             ),
             session_id="scheduler-session",
             completed=True,
+        )
+
+
+class FakeHotspotAgent:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, request):
+        self.calls.append(request)
+        return HotspotRunResult(
+            status="completed",
+            date="2026-08-15",
+            captured_at="2026-08-15T01:00:00+00:00",
+            fetched_count=2,
+            normalized_count=2,
+            merged_topic_count=1,
+            ranking_count=1,
+            top_topics=[
+                {
+                    "rank": 1,
+                    "topic_id": "hot_1",
+                    "canonical_title": "AI 芯片需求持续升温",
+                    "score": 88.0,
+                }
+            ],
         )
 
 

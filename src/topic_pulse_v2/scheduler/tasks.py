@@ -6,6 +6,9 @@ import json
 import re
 from typing import Protocol
 
+from topic_pulse_v2.information_search import create_hot_news_provider
+from topic_pulse_v2.process.hotspot_agent import HotspotAgent, HotspotRunRequest
+
 from .registry import ScheduledTaskRegistry
 
 
@@ -85,10 +88,33 @@ def cleanup_trace_logs() -> dict[str, str]:
     }
 
 
+def refresh_hotspots(
+    *,
+    hotspot_agent: HotspotAgent | None = None,
+    provider: str = "weibo",
+) -> dict:
+    """Refresh and persist today's platform-level hot news ranking."""
+
+    agent = hotspot_agent or HotspotAgent(provider=create_hot_news_provider(provider))
+    result = agent.run(HotspotRunRequest(provider=provider))
+    return {
+        "status": result.status,
+        "date": result.date,
+        "captured_at": result.captured_at,
+        "fetched_count": result.fetched_count,
+        "normalized_count": result.normalized_count,
+        "merged_topic_count": result.merged_topic_count,
+        "ranking_count": result.ranking_count,
+        "top_topics": result.top_topics,
+        "errors": result.errors,
+    }
+
+
 def register_builtin_tasks(
     registry: ScheduledTaskRegistry,
     *,
     chat_runtime: ChatRuntime | None = None,
+    hotspot_agent: HotspotAgent | None = None,
 ) -> None:
     registry.register(
         "refresh_topic",
@@ -104,6 +130,15 @@ def register_builtin_tasks(
         "cleanup_trace_logs",
         cleanup_trace_logs,
         description="Clean scheduler or agent trace logs.",
+        replace=True,
+    )
+    registry.register(
+        "refresh_hotspots",
+        lambda **kwargs: refresh_hotspots(
+            hotspot_agent=hotspot_agent,
+            **kwargs,
+        ),
+        description="Refresh today's platform-level hot news ranking.",
         replace=True,
     )
 
