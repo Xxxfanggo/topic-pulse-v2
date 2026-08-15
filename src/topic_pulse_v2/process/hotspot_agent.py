@@ -14,6 +14,7 @@ from typing import Any
 from topic_pulse_v2.db import Database, SQLiteDatabase
 from topic_pulse_v2.information_search.hot_news import EmptyHotNewsProvider, HotNewsItem, HotNewsProvider
 from topic_pulse_v2.llm_call import LLMClient, Message
+from topic_pulse_v2.trace import log_markdown
 
 
 def utc_now() -> datetime:
@@ -511,12 +512,14 @@ class HotspotAgent:
         llm_client: LLMClient | None = None,
         llm_provider: str | None = None,
         llm_model: str | None = None,
+        trace_log_path: str | None = "logs/hotspot_agent_trace.jsonl",
     ) -> None:
         self._provider = provider or EmptyHotNewsProvider()
         self._store = store or SQLiteHotspotStore()
         self._llm_client = llm_client
         self._llm_provider = llm_provider
         self._llm_model = llm_model
+        self._trace_log_path = trace_log_path
 
     def run(self, request: HotspotRunRequest | None = None) -> HotspotRunResult:
         request = request or HotspotRunRequest()
@@ -617,23 +620,29 @@ class HotspotAgent:
         if self._llm_client is None:
             return self._fallback_analysis(items, context)
         try:
-            response = self._llm_client.call(
-                [
-                    Message(role="system", content=self._system_prompt()),
-                    Message(
-                        role="user",
-                        content=json.dumps(
-                            {
-                                "date": run_date.isoformat(),
-                                "captured_at": _datetime_to_text(captured_at),
-                                "new_items": [asdict(item) for item in items],
-                                "existing_topics": [asdict(topic) for topic in context],
-                            },
-                            ensure_ascii=False,
-                            default=str,
-                        ),
+            messages = [
+                Message(role="system", content=self._system_prompt()),
+                Message(
+                    role="user",
+                    content=json.dumps(
+                        {
+                            "date": run_date.isoformat(),
+                            "captured_at": _datetime_to_text(captured_at),
+                            "new_items": [asdict(item) for item in items],
+                            "existing_topics": [asdict(topic) for topic in context],
+                        },
+                        ensure_ascii=False,
+                        default=str,
                     ),
-                ],
+                ),
+            ]
+            log_markdown(
+                self._trace_log_path,
+                "hotspot_agent_llm_prompt",
+                self._format_llm_prompt(messages),
+            )
+            response = self._llm_client.call(
+                messages,
                 provider=self._llm_provider,
                 model=self._llm_model,
                 temperature=0.1,
@@ -647,12 +656,75 @@ class HotspotAgent:
     @staticmethod
     def _system_prompt() -> str:
         return (
-            "你是后台热点沉淀 Agent 的语义分析步骤。请把 new_items 与 existing_topics 归并为今日热点主题。"
-            "只能基于输入内容，不要编造事实。只返回 JSON，不要 Markdown。格式："
-            "{\"merged_topics\":[{\"canonical_title\":\"统一标题\",\"matched_item_ids\":[\"item_1\"],"
-            "\"matched_existing_topic_id\":\"可为空\",\"summary\":\"摘要\",\"why_hot\":\"持续高热原因\","
-            "\"category\":\"分类\",\"trend\":\"rising|steady|falling\",\"confidence\":0.0}]}"
+            "# Agent 的角色定位与目标\n"
+            "你是 Topic Pulse 后台热点沉淀流程中的 HotspotAnalysisAgent。"
+            "你的任务不是回答用户聊天问题，而是把本小时抓取到的热点新闻条目 new_items，"
+            "结合今天已经沉淀的热点主题 existing_topics，归并成结构化的今日热点主题。"
+            "你的目标是帮助系统识别“今天持续高热、真实值得沉淀的热点”，并为后续排行、Web 展示和问答读取提供稳定结构化数据。\n\n"
+
+            "# 基本信息接收规则\n"
+            "你会收到一个 JSON 输入，通常包含：date、captured_at、new_items、existing_topics。\n"
+            "new_items 是本次新抓取的热点条目，每条通常包含 id、title、normalized_title、summary、url、source、rank、heat、category、raw 等字段。\n"
+            "existing_topics 是今天此前已经沉淀过的热点主题，每条通常包含 id、canonical_title、normalized_title、summary、why_hot、category、trend、first_seen_at、last_seen_at、source_count、observation_count 等字段。\n"
+            "你需要把 new_items 中语义相同、指向同一事件/话题/人物动态/公共议题的条目合并为一个 merged_topic。\n"
+            "如果 new_items 中某条内容与 existing_topics 中已有主题是同一热点，必须在 matched_existing_topic_id 中填入对应 existing topic 的 id。\n"
+            "如果无法确定是否同一热点，应保守处理为独立热点，不要强行合并。\n\n"
+
+            "# 核心决策逻辑\n"
+            "处理路径如下：\n"
+            "1. 先逐条理解 new_items 的 title、summary、source、rank、heat、category。\n"
+            "2. 判断 new_items 之间是否属于同一热点：同一事件、同一人物动态、同一产品/公司进展、同一社会议题、同一政策变化，可以合并。\n"
+            "3. 判断合并后的热点是否匹配 existing_topics：如果只是标题表达不同，但核心事件一致，应匹配已有主题。\n"
+            "4. 为每个热点生成 canonical_title，标题应简洁、中性、信息密度高，避免营销化、情绪化、夸张表达。\n"
+            "5. 生成 summary，说明这个热点发生了什么，只能基于输入信息概括。\n"
+            "6. 生成 why_hot，说明它为什么值得持续沉淀，例如排名靠前、多个相似条目出现、多个来源出现、与已有主题连续相关、热度仍在延续。\n"
+            "7. 判断 trend：新出现且排名靠前可用 rising；已存在且本次继续出现可用 steady；如果输入明确显示热度下降才用 falling。\n"
+            "8. 给出 confidence，表示你对归并和总结判断的置信度，范围 0 到 1。\n\n"
+            "样例 1：\n"
+            "new_items 中出现「AI 芯片需求持续升温」和「AI芯片订单增长」两个标题，它们都指向 AI 芯片需求增长，应合并为一个热点。\n"
+            "样例 2：\n"
+            "existing_topics 中已有「新能源车销量创新高」，new_items 中出现「新能源车销量继续创新高」，应匹配已有主题 id。\n"
+            "样例 3：\n"
+            "「某明星新剧开播」和「某明星回应争议」虽然人物相同，但事件不同，除非输入明确说明有关联，否则不要合并。\n\n"
+
+            "# 约束条件\n"
+            "1. 只能基于输入 JSON 中的信息进行归并、总结和判断，禁止编造事实、来源、时间、链接、热度原因。\n"
+            "2. 不要输出 Markdown、解释文字、代码块、前后缀说明，只能输出一个合法 JSON 对象。\n"
+            "3. matched_item_ids 必须只使用 new_items 中真实存在的 id，不能创造 id。\n"
+            "4. matched_existing_topic_id 必须为空字符串或 existing_topics 中真实存在的 id，不能创造 id。\n"
+            "5. 每个 new_item 最多只能归入一个 merged_topic，避免重复计算。\n"
+            "6. canonical_title、summary、why_hot 必须使用中文，保持客观克制。\n"
+            "7. 不确定 category 时可以使用输入中的 category；仍无法判断时使用空字符串。\n"
+            "8. confidence 必须是 0 到 1 之间的数字；trend 只能是 rising、steady、falling 三者之一。\n\n"
+
+            "# 输出规范\n"
+            "最终只返回如下结构的 JSON 对象：\n"
+            "{\"merged_topics\":[{\"canonical_title\":\"统一后的热点标题\","
+            "\"matched_item_ids\":[\"item_1\",\"item_2\"],"
+            "\"matched_existing_topic_id\":\"已有主题 id；没有则为空字符串\","
+            "\"summary\":\"基于输入信息生成的热点摘要\","
+            "\"why_hot\":\"基于排名、热度、来源数、连续出现等输入证据说明持续高热原因\","
+            "\"category\":\"分类\","
+            "\"trend\":\"rising|steady|falling\","
+            "\"confidence\":0.85}]}\n"
+            "如果没有任何可用热点，返回：{\"merged_topics\":[]}"
         )
+
+    @staticmethod
+    def _format_llm_prompt(messages: list[Message]) -> str:
+        sections = []
+        for index, message in enumerate(messages, start=1):
+            sections.append(
+                "\n".join(
+                    [
+                        f"### message {index}",
+                        f"role: {message.role}",
+                        "",
+                        message.content,
+                    ]
+                )
+            )
+        return "\n\n".join(sections)
 
     def _parse_analysis(
         self,
