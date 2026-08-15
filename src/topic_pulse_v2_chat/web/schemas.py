@@ -58,6 +58,27 @@ class TopicDetailResponse(TopicSummary):
     content: str
 
 
+class HotspotRankingItemResponse(BaseModel):
+    topic_id: str
+    rank: int
+    score: float
+    title: str
+    summary: str = ""
+    why_hot: str = ""
+    category: str = ""
+    trend: str = ""
+    first_seen_at: str = ""
+    last_seen_at: str = ""
+    source_count: int = 0
+    observation_count: int = 0
+
+
+class HotspotTodayResponse(BaseModel):
+    date: str
+    updated_at: str = ""
+    items: list[HotspotRankingItemResponse] = Field(default_factory=list)
+
+
 class SessionSummary(BaseModel):
     id: str
     title: str

@@ -24,6 +24,7 @@ from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTa
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage, SQLiteSessionStore
 from topic_pulse_v2.topics import SQLiteTopicStore, TopicRecord
+from topic_pulse_v2.process import SQLiteHotspotStore
 from topic_pulse_v2_chat.web.schemas import (
     AuthLoginRequest,
     AuthMessageResponse,
@@ -35,6 +36,8 @@ from topic_pulse_v2_chat.web.schemas import (
     ChatResponse,
     CreateTopicRefreshJobRequest,
     HealthResponse,
+    HotspotRankingItemResponse,
+    HotspotTodayResponse,
     JobRunListResponse,
     JobRunResponse,
     SchedulerJobListResponse,
@@ -155,6 +158,10 @@ def _topic_summary(path: Path, *, topic_id: str | None = None, title: str | None
 
 def _topic_store() -> SQLiteTopicStore:
     return SQLiteTopicStore(topics_dir=TOPICS_DIR)
+
+
+def _hotspot_store() -> SQLiteHotspotStore:
+    return SQLiteHotspotStore()
 
 
 def _topic_summary_from_record(record: TopicRecord) -> TopicSummary:
@@ -1008,6 +1015,39 @@ def create_app(
             raise HTTPException(status_code=404, detail="Topic not found")
         summary = _topic_summary_from_record(record)
         return TopicDetailResponse(**_model_data(summary), content=path.read_text(encoding="utf-8"))
+
+    @app.get("/api/hotspots/today", response_model=HotspotTodayResponse)
+    def get_today_hotspots(
+        limit: int = 10,
+        user: AuthUser = Depends(current_user),
+    ) -> HotspotTodayResponse:
+        today = datetime.now().astimezone().date()
+        safe_limit = max(1, min(int(limit or 10), 50))
+        rows = _hotspot_store().list_daily_ranking(today, limit=safe_limit)
+        updated_at = ""
+        if rows:
+            updated_at = max(str(row.get("updated_at") or "") for row in rows)
+        return HotspotTodayResponse(
+            date=today.isoformat(),
+            updated_at=updated_at,
+            items=[
+                HotspotRankingItemResponse(
+                    topic_id=str(row.get("topic_id") or ""),
+                    rank=int(row.get("rank") or 0),
+                    score=float(row.get("score") or 0.0),
+                    title=str(row.get("canonical_title") or ""),
+                    summary=str(row.get("summary") or ""),
+                    why_hot=str(row.get("why_hot") or ""),
+                    category=str(row.get("category") or ""),
+                    trend=str(row.get("trend") or ""),
+                    first_seen_at=str(row.get("first_seen_at") or ""),
+                    last_seen_at=str(row.get("last_seen_at") or ""),
+                    source_count=int(row.get("source_count") or 0),
+                    observation_count=int(row.get("observation_count") or 0),
+                )
+                for row in rows
+            ],
+        )
 
     @app.get("/api/scheduler/jobs", response_model=SchedulerJobListResponse)
     def list_scheduler_jobs(user: AuthUser = Depends(current_user)) -> SchedulerJobListResponse:

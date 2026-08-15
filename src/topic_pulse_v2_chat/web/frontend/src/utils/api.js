@@ -95,6 +95,10 @@ export function getCurrentUser() {
   return requestJson('/api/auth/me', {}, 'Auth session expired');
 }
 
+export function getTodayHotspots(limit = 10) {
+  return requestJson(`/api/hotspots/today?limit=${encodeURIComponent(limit)}`, {}, '今日热点加载失败');
+}
+
 export function getTopicSchedule(topicId) {
   return requestJson(`/api/topics/${encodeURIComponent(topicId)}/schedule`, {}, 'Schedule load failed');
 }

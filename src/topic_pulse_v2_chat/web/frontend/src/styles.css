@@ -338,8 +338,122 @@ body {
   gap: 10px;
 }
 
+.hotspotBoard {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e0e7ff;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 88%), rgb(248 251 255 / 94%)),
+    #ffffff;
+  box-shadow: 0 14px 36px rgb(17 24 39 / 6%);
+  padding: 12px;
+}
+
+.hotspotHeader {
+  min-height: 26px;
+}
+
+.hotspotHeaderIcon {
+  color: #f59e0b;
+}
+
+.hotspotList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hotspotItem {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid #e6ecf8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 10px;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.hotspotItem:hover {
+  border-color: #c7d2fe;
+  background: #f8faff;
+  box-shadow: 0 10px 24px rgb(79 70 229 / 9%);
+  transform: translateY(-1px);
+}
+
+.hotspotRank {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #4f46e5;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.hotspotItem:nth-child(1) .hotspotRank,
+.hotspotItem:nth-child(2) .hotspotRank,
+.hotspotItem:nth-child(3) .hotspotRank {
+  background: #fff7ed;
+  color: #ea580c;
+}
+
+.hotspotCopy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.hotspotTitle,
+.hotspotMeta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotspotTitle {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.hotspotMeta {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.hotspotSkeleton {
+  min-height: 118px;
+  padding: 4px 2px;
+}
+
+.hotspotEmpty {
+  min-height: 112px;
+  padding: 4px 0 0;
+}
+
 .promptCard {
   min-height: 98px;
+}
+
+.promptCard.isStatic {
+  border-color: #e8edf7;
+  border-style: dashed;
+  background:
+    linear-gradient(180deg, rgb(248 250 252 / 86%), rgb(255 255 255 / 92%)),
+    #ffffff;
+  box-shadow: none;
 }
 
 .promptCard .ant-card-body {
@@ -350,14 +464,17 @@ body {
 
 .promptCard .ant-tag {
   width: fit-content;
+  opacity: .78;
 }
 
 .promptCard h5.ant-typography {
   margin: 0;
+  color: #334155;
 }
 
 .promptCard .ant-typography {
   margin-bottom: 0;
+  color: #64748b;
 }
 
 .messageList {
@@ -1444,6 +1561,10 @@ body {
   }
 
   .promptGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .hotspotList {
     grid-template-columns: 1fr;
   }
 

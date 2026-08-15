@@ -448,6 +448,35 @@ class SQLiteHotspotStore:
                 )
         return ranking
 
+    def list_daily_ranking(self, ranking_date: date, *, limit: int = 10) -> list[dict[str, Any]]:
+        self.initialize()
+        rows = self._database.fetch_all(
+            """
+            SELECT
+                r.ranking_date,
+                r.rank,
+                r.score,
+                r.summary,
+                r.why_hot,
+                r.updated_at,
+                t.id AS topic_id,
+                t.canonical_title,
+                t.category,
+                t.trend,
+                t.first_seen_at,
+                t.last_seen_at,
+                t.source_count,
+                t.observation_count
+            FROM daily_hotspot_rankings r
+            JOIN hotspot_topics t ON t.id = r.topic_id
+            WHERE r.ranking_date = ?
+            ORDER BY r.rank ASC
+            LIMIT ?
+            """,
+            (ranking_date.isoformat(), limit),
+        )
+        return [dict(row) for row in rows]
+
     def close(self) -> None:
         self._database.close()
 

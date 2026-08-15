@@ -17,6 +17,7 @@ import {
   clearAuthSession,
   getCurrentUser,
   getSchedulerJobRuns,
+  getTodayHotspots,
   getStoredAuthUser,
   getTopicSchedule,
   loginWithEmail,
@@ -185,6 +186,9 @@ function TopicPulseApp() {
   const [topicScheduleLoading, setTopicScheduleLoading] = useState(false);
   const [topicScheduleActionLoading, setTopicScheduleActionLoading] = useState('');
   const [topicScheduleError, setTopicScheduleError] = useState('');
+  const [todayHotspots, setTodayHotspots] = useState([]);
+  const [todayHotspotsLoading, setTodayHotspotsLoading] = useState(false);
+  const [todayHotspotsError, setTodayHotspotsError] = useState('');
   const [authUser, setAuthUser] = useState(getStoredAuthUser);
   const [authChecking, setAuthChecking] = useState(true);
   const inputRef = useRef(null);
@@ -312,6 +316,20 @@ function TopicPulseApp() {
     }
   }
 
+  async function loadTodayHotspots() {
+    setTodayHotspotsLoading(true);
+    setTodayHotspotsError('');
+    try {
+      const data = await getTodayHotspots(10);
+      setTodayHotspots(data.items || []);
+    } catch (error) {
+      setTodayHotspots([]);
+      setTodayHotspotsError(error.message || '今日热点加载失败');
+    } finally {
+      setTodayHotspotsLoading(false);
+    }
+  }
+
   async function loadTopicDetail(topicId) {
     if (!topicId) return;
     setTopicDetailLoading(true);
@@ -433,6 +451,7 @@ function TopicPulseApp() {
       return;
     }
     loadChatSessions();
+    loadTodayHotspots();
   }, [authChecking, authUser]);
 
   useEffect(() => {
@@ -488,6 +507,11 @@ function TopicPulseApp() {
 
   async function copyMessage(content) {
     await window.navigator.clipboard?.writeText(content);
+  }
+
+  function fillComposer(nextInput) {
+    setInput(nextInput);
+    window.requestAnimationFrame(() => inputRef.current?.focus?.());
   }
 
   function scrollConversationToBottom(behavior = 'smooth', frames = 1) {
@@ -761,7 +785,13 @@ function TopicPulseApp() {
                   />
                 )
               ) : messages.length === 0 ? (
-                <EmptyChatCanvas onPrompt={sendMessage} />
+                <EmptyChatCanvas
+                  hotspotError={todayHotspotsError}
+                  hotspots={todayHotspots}
+                  hotspotsLoading={todayHotspotsLoading}
+                  onHotspotSelect={fillComposer}
+                  onPrompt={sendMessage}
+                />
               ) : (
                 <div className="messageList">
                   {messages.map((message, index) => (
