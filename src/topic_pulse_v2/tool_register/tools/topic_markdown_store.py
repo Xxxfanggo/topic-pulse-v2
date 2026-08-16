@@ -9,13 +9,14 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from topic_pulse_v2.config import topics_dir
 from topic_pulse_v2.topics import SQLiteTopicStore
 
 if TYPE_CHECKING:
     from topic_pulse_v2.tool_register.registry import ToolRegistry
 
 TOPIC_MARKDOWN_STORE_TOOL_NAME = "topic_markdown_store"
-DEFAULT_ROOT = "data/topics"
+DEFAULT_ROOT = str(topics_dir())
 SECTION_BASIC_INFO = "## 基本信息"
 SECTION_SUMMARY = "## 摘要"
 SECTION_TIMELINE = "## 时间线"

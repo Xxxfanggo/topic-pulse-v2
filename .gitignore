@@ -27,7 +27,6 @@ src/topic_pulse_v2_chat/web/frontend/node_modules/.vite/
 /logs/
 *.log
 src/topic_pulse_v2/session/data/
-!src/topic_pulse_v2/session/data/.gitkeep
 
 # Local topic data generated while running the app
 /data/

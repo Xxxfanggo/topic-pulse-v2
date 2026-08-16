@@ -312,7 +312,7 @@ data/topics/
 会话历史存储在：
 
 ```text
-src/topic_pulse_v2/session/data/
+data/session/
 ```
 
 这种设计让 Agent 的“记忆”既能被程序读取，也能被人直接打开审阅。
@@ -322,13 +322,13 @@ src/topic_pulse_v2/session/data/
 默认 trace 文件：
 
 ```text
-logs/react_trace/YYYY-MM-DD.log
+data/logs/react_trace/YYYY-MM-DD.log
 ```
 
 热点分析 Agent 的 LLM prompt 日志默认写入：
 
 ```text
-logs/hotspot_agent_trace/YYYY-MM-DD.log
+data/logs/hotspot_agent_trace/YYYY-MM-DD.log
 ```
 
 你可以用它观察：
@@ -434,9 +434,10 @@ src/topic_pulse_v2_chat/
   web/                   # FastAPI backend and React frontend
 
 data/topics/             # long-term topic markdown memory
-data/topic_pulse.sqlite3 # scheduler, hotspot and topic index data
-logs/react_trace/YYYY-MM-DD.log   # date-partitioned runtime trace log
-logs/hotspot_agent_trace/YYYY-MM-DD.log # hotspot LLM prompt trace log
+data/session/            # conversation session markdown history
+data/topic_pulse.sqlite3 # auth, scheduler, hotspot, topic and session index data
+data/logs/react_trace/YYYY-MM-DD.log   # date-partitioned runtime trace log
+data/logs/hotspot_agent_trace/YYYY-MM-DD.log # hotspot LLM prompt trace log
 tests/                   # unit and flow tests
 test_case/               # functional spec and agent test cases
 README/                  # README screenshots and architecture images

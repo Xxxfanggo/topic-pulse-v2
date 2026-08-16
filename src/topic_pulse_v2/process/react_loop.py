@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
+from topic_pulse_v2.config import react_trace_log_path
 from topic_pulse_v2.context_trim import (
     ContextTrimRequest,
     ContextTrimmer,
@@ -47,7 +48,7 @@ class ReActConfig:
     session_history_recent_turns_on_over_budget: int = 5
     save_user_input_to_memory: bool = False
     save_final_answer_to_memory: bool = False
-    trace_log_path: str | None = "logs/react_trace.jsonl"
+    trace_log_path: str | None = field(default_factory=lambda: str(react_trace_log_path()))
     system_prompt: str = (
 
         "# 角色与目标\n"

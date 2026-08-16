@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from topic_pulse_v2.auth import AuthService, AuthUser
-from topic_pulse_v2.config import load_env_file
+from topic_pulse_v2.config import load_env_file, session_data_dir, topics_dir
 from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage, SQLiteSessionStore
@@ -53,8 +53,8 @@ from topic_pulse_v2_chat.web.schemas import (
 from topic_pulse_v2_chat.web.react_service import ReactChatService, react_result_steps_to_dict
 
 FRONTEND_DIST_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
-TOPICS_DIR = Path(__file__).resolve().parents[3] / "data" / "topics"
-SESSION_DATA_DIR = Path(__file__).resolve().parents[2] / "topic_pulse_v2" / "session" / "data"
+TOPICS_DIR = topics_dir()
+SESSION_DATA_DIR = session_data_dir()
 logger = logging.getLogger(__name__)
 load_env_file()
 

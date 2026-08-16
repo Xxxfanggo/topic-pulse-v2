@@ -31,7 +31,7 @@ class HotspotAgentTests(unittest.TestCase):
 
         result = agent.run(
             HotspotRunRequest(
-                captured_at=datetime(2026, 8, 15, 1, 0, tzinfo=timezone.utc),
+                captured_at=datetime(2026, 8, 17, 1, 0, tzinfo=timezone.utc),
             )
         )
         print("-------------------------------------------")

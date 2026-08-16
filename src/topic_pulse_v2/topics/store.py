@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from topic_pulse_v2.config import database_path, topics_dir as default_topics_dir
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -39,11 +41,11 @@ class SQLiteTopicStore:
     def __init__(
         self,
         *,
-        db_path: str | Path = "data/topic_pulse.sqlite3",
-        topics_dir: str | Path = "data/topics",
+        db_path: str | Path | None = None,
+        topics_dir: str | Path | None = None,
     ) -> None:
-        self.db_path = Path(db_path)
-        self.topics_dir = Path(topics_dir)
+        self.db_path = Path(db_path) if db_path is not None else database_path()
+        self.topics_dir = Path(topics_dir) if topics_dir is not None else default_topics_dir()
 
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

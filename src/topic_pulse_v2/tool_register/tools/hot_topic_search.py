@@ -7,6 +7,7 @@ from datetime import date as date_type
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from topic_pulse_v2.config import database_path
 from topic_pulse_v2.process import SQLiteHotspotStore
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ def hot_topic_search(
     *,
     date: str | None = None,
     limit: int = 10,
-    db_path: str = "data/topic_pulse.sqlite3",
+    db_path: str | None = None,
     store: SQLiteHotspotStore | None = None,
 ) -> dict[str, Any]:
     """Search locally persisted hot-topic rankings."""
@@ -29,7 +30,7 @@ def hot_topic_search(
     target_date = _parse_date(date)
     safe_limit = max(1, min(int(limit or 10), 50))
     owns_store = store is None
-    hotspot_store = store or SQLiteHotspotStore(path=db_path)
+    hotspot_store = store or SQLiteHotspotStore(path=db_path or database_path())
     try:
         rows = hotspot_store.list_daily_ranking(target_date, limit=50)
     finally:

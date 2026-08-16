@@ -11,10 +11,13 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from topic_pulse_v2.config import hotspot_trace_log_path
 from topic_pulse_v2.db import Database, SQLiteDatabase
 from topic_pulse_v2.information_search.hot_news import EmptyHotNewsProvider, HotNewsItem, HotNewsProvider
 from topic_pulse_v2.llm_call import LLMClient, Message
 from topic_pulse_v2.trace import log_markdown
+
+_DEFAULT_TRACE_LOG_PATH = object()
 
 
 def utc_now() -> datetime:
@@ -145,7 +148,7 @@ class SQLiteHotspotStore:
         self,
         database: Database | None = None,
         *,
-        path: str | Path = "data/topic_pulse.sqlite3",
+        path: str | Path | None = None,
     ) -> None:
         self._database = database or SQLiteDatabase(path)
 
@@ -541,14 +544,18 @@ class HotspotAgent:
         llm_client: LLMClient | None = None,
         llm_provider: str | None = None,
         llm_model: str | None = None,
-        trace_log_path: str | None = "logs/hotspot_agent_trace.jsonl",
+        trace_log_path: str | None | object = _DEFAULT_TRACE_LOG_PATH,
     ) -> None:
         self._provider = provider or EmptyHotNewsProvider()
         self._store = store or SQLiteHotspotStore()
         self._llm_client = llm_client
         self._llm_provider = llm_provider
         self._llm_model = llm_model
-        self._trace_log_path = trace_log_path
+        self._trace_log_path = (
+            str(hotspot_trace_log_path())
+            if trace_log_path is _DEFAULT_TRACE_LOG_PATH
+            else trace_log_path
+        )
 
     def run(self, request: HotspotRunRequest | None = None) -> HotspotRunResult:
         request = request or HotspotRunRequest()

@@ -17,6 +17,8 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Protocol
 
+from topic_pulse_v2.config import database_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -204,7 +206,7 @@ class AuthService:
     def __init__(
         self,
         *,
-        path: str | Path = "data/topic_pulse.sqlite3",
+        path: str | Path | None = None,
         sender: EmailCodeSender | None = None,
         jwt_codec: JwtCodec | None = None,
         code_ttl: timedelta = timedelta(minutes=10),
@@ -212,7 +214,7 @@ class AuthService:
         max_code_attempts: int = 5,
         min_code_interval: timedelta = timedelta(seconds=60),
     ) -> None:
-        self.path = Path(path)
+        self.path = Path(path) if path is not None else database_path()
         self.sender = sender or default_email_code_sender()
         self.jwt_codec = jwt_codec or JwtCodec()
         self.code_ttl = code_ttl

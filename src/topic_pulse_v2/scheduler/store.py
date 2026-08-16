@@ -80,7 +80,7 @@ class SQLiteSchedulerStore(SchedulerStore):
         self,
         database: Database | None = None,
         *,
-        path: str | Path = "data/topic_pulse.sqlite3",
+        path: str | Path | None = None,
     ) -> None:
         self._database = database or SQLiteDatabase(path)
 

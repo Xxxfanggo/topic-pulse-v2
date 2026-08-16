@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from topic_pulse_v2.config import session_data_dir
+
 from .state import utc_now
 from .store import SQLiteSessionStore
 
@@ -56,7 +58,7 @@ class MarkdownSessionHistoryStore(SessionHistoryStore):
     )
 
     def __init__(self, root_dir: str | Path | None = None, *, session_store: SQLiteSessionStore | None = None) -> None:
-        self._root_dir = Path(root_dir) if root_dir else Path(__file__).parent / "data"
+        self._root_dir = Path(root_dir) if root_dir else session_data_dir()
         self._root_dir.mkdir(parents=True, exist_ok=True)
         self._session_store = session_store
 

@@ -8,6 +8,8 @@
 data/topic_pulse.sqlite3
 ```
 
+生产部署可通过 `TOPIC_PULSE_DATA_DIR=/app/data` 把数据库解析为 `/app/data/topic_pulse.sqlite3`。
+
 不要为调度服务创建独立数据库。
 
 ## 目录结构
@@ -170,7 +172,7 @@ POST /api/topics/{topic_id}/schedule
 
 接口执行流程：
 
-1. 根据 `topic_id` 定位 `data/topics/{topic_id}.md`。
+1. 根据 `topic_id` 定位运行期话题目录中的 Markdown 文件，默认是 `data/topics/{topic_id}.md`。
 2. 校验话题 Markdown 文件是否存在。
 3. 查询已有任务，判断该话题是否已经有刷新任务。
 4. 如果已存在，直接返回已有任务。
