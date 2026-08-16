@@ -26,9 +26,11 @@
   <a href="#project-layout">Project Layout</a>
 </p>
 
-Topic Pulse V2 不是一个一次性搜索脚本，也不是一个普通聊天机器人。它是一套围绕“热点信息持续追踪”设计的 Agent 工程骨架：把联网搜索、多轮会话、本地 Markdown 记忆、工具调用、上下文管理和 JSONL 可观测日志组织成一个可扩展、可调试、可测试的运行时。
+Topic Pulse V2 不是一个一次性搜索脚本，也不是一个普通聊天机器人。它是一套围绕“热点信息持续追踪”设计的 Agent 工程骨架：把联网搜索、多轮会话、本地 Markdown 记忆、后台热点沉淀、工具调用、上下文管理和 JSONL 可观测日志组织成一个可扩展、可调试、可测试的运行时。
 
 当用户只是查询一个普通话题时，Agent 会联网检索并直接返回结构化结果；当用户明确表达“持续关注”“长期跟踪”“记录下来”时，Agent 会把搜索结果沉淀为本地 Markdown 话题记忆，并在后续会话中持续合并更新。
+
+同时，系统内置了一个平台级热点沉淀链路：后端启动时会自动创建微博热搜每小时刷新任务，定时抓取今日热点、归并相似条目、提炼摘要、计算今日热点排行，并在新对话首页展示 Top 10。用户点击某个热点后，热点会回填到聊天输入框，方便继续分析。
 
 ## 🖥️ Preview
 
@@ -54,6 +56,8 @@ Topic Pulse V2 不是一个一次性搜索脚本，也不是一个普通聊天�
 | ReAct Agent Runtime | 支持模型推理、工具选择、工具观察、最终结构化回答的完整闭环。 |
 | Local Tool Registry | 本地 Python 工具自动注册，并导出为 LLM 可调用的 tool schema。 |
 | Markdown Topic Memory | 将长期关注话题保存为可读、可审计、可手动维护的 Markdown 时间线。 |
+| HotspotAgent Pipeline | 平台级后台 Agent 定时沉淀今日热点，生成小时级观测和日排行。 |
+| Weibo Hot Provider | `information_search` 中提供微博热搜 Provider，可继续扩展其他热点源。 |
 | Session-managed History | Web / CLI 不维护历史，由 session 层根据 `session_id` 统一读写多轮对话。 |
 | Context Trim Boundary | LLM 调用前统一经过 `context_trim`，为后续裁剪、压缩、摘要预留扩展点。 |
 | JSONL Observability | LLM 请求、响应、工具参数、工具结果全部写入 trace 文件，方便复盘。 |
@@ -158,6 +162,18 @@ User Input
   -> 返回更新结果
 ```
 
+平台热点沉淀路径：
+
+```text
+FastAPI 启动
+  -> 自动确保 refresh_hotspots(provider="weibo") 每小时任务存在
+  -> SchedulerService 定时触发
+  -> WeiboHotNewsProvider 拉取微博热搜
+  -> HotspotAgent 固定 pipeline 清洗、归并、总结、沉淀
+  -> SQLite 保存快照、主题、观测、日排行
+  -> Web 首页读取 /api/hotspots/today 展示 Top 10
+```
+
 ## 🏗️ Architecture
 
 <p align="center">
@@ -179,6 +195,13 @@ topic_pulse_v2.process.ReActAgent
   |-- memory            # lightweight user memory
   |-- context_trim      # context management boundary
   |-- trace.py          # jsonl observability
+
+topic_pulse_v2.process.HotspotAgent
+  |
+  |-- information_search.hot_news  # hot news providers, currently Weibo
+  |-- SQLiteHotspotStore           # snapshots, topics, observations, rankings
+  |-- llm_call                     # optional semantic merge and summarization
+  |-- scheduler.refresh_hotspots   # hourly background refresh task
 ```
 
 Design principles:
@@ -195,6 +218,51 @@ Design principles:
 
 `ReActAgent` 是主流程编排器，负责构建 prompt、调用上下文管理、请求大模型、解析工具调用、执行工具、写 trace、维护 session history，并最终返回 `ReActResult`。
 
+### HotspotAgent
+
+`HotspotAgent` 是后台固定 pipeline Agent，位于：
+
+```text
+src/topic_pulse_v2/process/hotspot_agent.py
+```
+
+它不采用开放式 ReAct 工具循环，而是按固定步骤执行：
+
+```text
+fetch_hot_news
+  -> normalize_items
+  -> save_snapshots
+  -> load_today_context
+  -> llm_merge_and_summarize 或 deterministic fallback
+  -> persist_analysis
+  -> recalculate_daily_ranking
+```
+
+LLM 只负责语义归并和摘要生成；最终数据校验、落库、排序和任务状态由确定性代码完成。如果没有配置 LLM，或 LLM 输出不可解析，流程会走规则 fallback，保证后台任务不会因为模型不可用而中断。
+
+### Hot News Providers
+
+热点外部数据源放在：
+
+```text
+src/topic_pulse_v2/information_search/hot_news.py
+```
+
+当前内置：
+
+| Provider | Purpose |
+| --- | --- |
+| `EmptyHotNewsProvider` | 空实现，用于安全占位和测试。 |
+| `WeiboHotNewsProvider` | 抓取微博实时热搜页并转换为统一 `HotNewsItem`。 |
+
+Provider 统一输出：
+
+```text
+HotNewsItem(title, summary, url, source, rank, heat, category, raw)
+```
+
+后续扩展其他热点接口时，实现同样的 `fetch_hot_news()` 边界即可。
+
 ### Local Tools
 
 当前核心工具：
@@ -205,6 +273,33 @@ Design principles:
 | `topic_markdown_read_summary` | 读取本地话题摘要，判断是否命中已关注话题。 |
 | `topic_markdown_read_detail` | 读取某个 Markdown 话题的完整内容。 |
 | `topic_markdown_store` | 创建或更新本地话题 Markdown 记忆。 |
+
+热点沉淀暂时不通过聊天工具暴露给 LLM。后台刷新链路由 `HotspotAgent` 直接调用 Provider / Store / LLMClient；Web 首页通过只读 API 获取今日排行。
+
+### Scheduler
+
+调度服务使用 APScheduler 作为进程内触发器，并把任务定义与运行记录持久化到 SQLite。
+
+当前内置任务：
+
+| Task | Purpose |
+| --- | --- |
+| `refresh_topic` | 定时刷新某个用户已关注 Markdown 话题。 |
+| `refresh_hotspots` | 平台级定时刷新今日热点排行。 |
+
+后端启动时会自动确保存在一条默认微博热点任务：
+
+```text
+id = hotspot-refresh-weibo-hourly
+task_name = refresh_hotspots
+trigger = interval
+trigger_args = {"hours": 1}
+kwargs = {"provider": "weibo"}
+metadata.type = hotspot_refresh
+metadata.provider = weibo
+```
+
+这条任务是平台级共享任务，不属于某个用户。
 
 ### Markdown Memory
 
@@ -228,6 +323,12 @@ src/topic_pulse_v2/session/data/
 
 ```text
 logs/react_trace/YYYY-MM-DD.log
+```
+
+热点分析 Agent 的 LLM prompt 日志默认写入：
+
+```text
+logs/hotspot_agent_trace/YYYY-MM-DD.log
 ```
 
 你可以用它观察：
@@ -271,6 +372,16 @@ Agent 会读取本地话题、联网搜索最新内容，并创建或更新 Mark
 
 历史由 session 层维护，Web 和 CLI 只需要持续传递同一个 `session_id`。
 
+### 今日热点排行
+
+新对话首页会读取本地沉淀的今日热点 Top 10：
+
+```text
+GET /api/hotspots/today?limit=10
+```
+
+热点榜来自后台 `refresh_hotspots` 定时任务，而不是页面临时联网搜索。点击某个热点不会立即发送消息，只会把分析提示填入聊天输入框，用户可以继续修改后再发送。
+
 ## 🛠️ Developer Guide
 
 ### Run Tests
@@ -308,10 +419,11 @@ Terminal 模式适合给 `ReActAgent.run()`、工具执行器、搜索工具、M
 ```text
 src/topic_pulse_v2/
   context_trim/          # context assembly, trimming and compression boundary
-  information_search/    # web search integrations
+  information_search/    # web search and hot news provider integrations
   llm_call/              # LLM client and provider abstraction
   memory/                # lightweight user memory
-  process/               # ReActAgent and business orchestration
+  process/               # ReActAgent, HotspotAgent and business orchestration
+  scheduler/             # persisted scheduled jobs and APScheduler facade
   session/               # session state and markdown conversation history
   tool_call/             # tool execution runtime
   tool_register/         # local tool registry and auto-discovery
@@ -322,7 +434,9 @@ src/topic_pulse_v2_chat/
   web/                   # FastAPI backend and React frontend
 
 data/topics/             # long-term topic markdown memory
+data/topic_pulse.sqlite3 # scheduler, hotspot and topic index data
 logs/react_trace/YYYY-MM-DD.log   # date-partitioned runtime trace log
+logs/hotspot_agent_trace/YYYY-MM-DD.log # hotspot LLM prompt trace log
 tests/                   # unit and flow tests
 test_case/               # functional spec and agent test cases
 README/                  # README screenshots and architecture images
@@ -334,7 +448,9 @@ README/                  # README screenshots and architecture images
 - Better topic matching and alias resolution
 - Markdown diff, conflict resolution and provenance tracking
 - SQLite / PostgreSQL backed session and topic stores
+- Dedicated hotspot detail page and cross-source trend visualization
 - Topic graph and timeline visualization in Web UI
+- More hot news providers beyond Weibo
 - More formal Agent evaluation cases
 
 ## ⭐ Star History
