@@ -20,6 +20,15 @@ export function getAuthToken() {
   return window.localStorage.getItem('topic_pulse_access_token') || '';
 }
 
+export function getGuestId() {
+  const existing = window.localStorage.getItem('topic_pulse_guest_id');
+  if (existing) return existing;
+  const randomId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const guestId = `guest_${randomId}`;
+  window.localStorage.setItem('topic_pulse_guest_id', guestId);
+  return guestId;
+}
+
 export function setAuthSession(payload) {
   window.localStorage.setItem('topic_pulse_access_token', payload.access_token || '');
   window.localStorage.setItem('topic_pulse_auth_user', JSON.stringify(payload.user || null));
@@ -40,7 +49,10 @@ export function getStoredAuthUser() {
 
 export function authHeaders(headers = {}) {
   const token = getAuthToken();
-  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+  if (token) {
+    return { ...headers, Authorization: `Bearer ${token}` };
+  }
+  return { ...headers, 'X-Guest-Id': getGuestId() };
 }
 
 export function authorizedFetch(url, options = {}) {

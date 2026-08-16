@@ -21,7 +21,9 @@ export default function AppSidebar({
   routedSessionId,
   sessionsError,
   sessionsLoading,
+  sessionLimit,
   userId,
+  isGuest,
 }) {
   return (
     <Sider className="appSider" width={280} collapsedWidth={0} collapsed={collapsed} trigger={null}>
@@ -57,6 +59,7 @@ export default function AppSidebar({
         <div className="siderSection">
           <Text type="secondary" className="sectionTitle">
             最近会话
+            {sessionLimit ? `（${chatSessions.length}/${sessionLimit}）` : ''}
           </Text>
           <div className="sessionList">
             {sessionsLoading && chatSessions.length === 0 && (
@@ -91,9 +94,9 @@ export default function AppSidebar({
           <Flex align="center" gap={10}>
             <Avatar>{userId?.slice(0, 1).toUpperCase() || 'U'}</Avatar>
             <div>
-              <Text strong>已登录</Text>
+              <Text strong>{isGuest ? '访客模式' : '已登录'}</Text>
               <Text type="secondary" className="blockText">
-                {userId}
+                {isGuest ? userId?.replace('@guest.local', '') : userId}
               </Text>
             </div>
           </Flex>

@@ -115,6 +115,10 @@ class AuthRuntime(Protocol):
 
 
 _STREAM_END = object()
+GUEST_USER_PREFIX = "guest_"
+GUEST_SESSION_LIMIT = 3
+GUEST_LIMIT_ERROR = "访客最多创建 3 个对话，请登录后继续。"
+GUEST_SCHEDULE_ERROR = "访客不能创建定时调度任务，请登录后使用。"
 
 
 def _next_stream_event(iterator):
@@ -623,11 +627,56 @@ def _session_store(session_store: SQLiteSessionStore | None = None) -> MarkdownS
     return MarkdownSessionHistoryStore(SESSION_DATA_DIR, session_store=session_store)
 
 
+def _auth_user_response(user: AuthUser) -> AuthUserResponse:
+    return AuthUserResponse(id=user.id, email=user.email, is_guest=user.is_guest)
+
+
 def _auth_token_response(user: AuthUser, token: str) -> AuthTokenResponse:
     return AuthTokenResponse(
         access_token=token,
-        user=AuthUserResponse(id=user.id, email=user.email),
+        user=_auth_user_response(user),
     )
+
+
+def _guest_user_from_id(guest_id: str) -> AuthUser:
+    value = str(guest_id or "").strip()
+    if not re.fullmatch(r"guest_[A-Za-z0-9_.-]{8,96}", value):
+        raise ValueError("Invalid guest id.")
+    return AuthUser(
+        id=value,
+        email=f"{value[:18]}@guest.local",
+        status="active",
+        is_guest=True,
+    )
+
+
+def _visible_session_count(user_id: str) -> int:
+    index_store = _session_index_store()
+    store = _session_store(index_store)
+    count = 0
+    for record in index_store.list_sessions(user_id=user_id):
+        path = Path(record.markdown_path)
+        if not path.exists() or not path.is_file():
+            continue
+        messages = store.list(record.id, user_id=user_id)
+        if _is_hidden_session(messages):
+            continue
+        count += 1
+    return count
+
+
+def _ensure_guest_can_create_session(user: AuthUser, session_id: str | None) -> None:
+    if not user.is_guest:
+        return
+    if session_id and _session_index_store().get_session(user_id=user.id, session_id=session_id) is not None:
+        return
+    if _visible_session_count(user.id) >= GUEST_SESSION_LIMIT:
+        raise HTTPException(status_code=403, detail=GUEST_LIMIT_ERROR)
+
+
+def _ensure_registered_user(user: AuthUser) -> None:
+    if user.is_guest:
+        raise HTTPException(status_code=403, detail=GUEST_SCHEDULE_ERROR)
 
 
 
@@ -761,16 +810,24 @@ def create_app(
         allow_headers=["*"],
     )
 
-    def current_user(authorization: str | None = Header(default=None)) -> AuthUser:
+    def current_user(
+        authorization: str | None = Header(default=None),
+        x_guest_id: str | None = Header(default=None, alias="X-Guest-Id"),
+    ) -> AuthUser:
         if not auth_required:
             return AuthUser(id="anonymous-user-1", email="anonymous@example.test", status="active")
         scheme, _, token = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not token:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        try:
-            return app.state.auth_service.authenticate_token(token)
-        except Exception as exc:
-            raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+        if scheme.lower() == "bearer" and token:
+            try:
+                return app.state.auth_service.authenticate_token(token)
+            except Exception as exc:
+                raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+        if x_guest_id:
+            try:
+                return _guest_user_from_id(x_guest_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=401, detail="Invalid guest id") from exc
+        raise HTTPException(status_code=401, detail="Authentication required")
 
     @app.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -812,10 +869,11 @@ def create_app(
 
     @app.get("/api/auth/me", response_model=AuthUserResponse)
     def me(user: AuthUser = Depends(current_user)) -> AuthUserResponse:
-        return AuthUserResponse(id=user.id, email=user.email)
+        return _auth_user_response(user)
 
     @app.post("/api/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest, user: AuthUser = Depends(current_user)) -> ChatResponse:
+        _ensure_guest_can_create_session(user, request.session_id)
         try:
             result = await run_in_threadpool(
                 app.state.chat_runtime.chat,
@@ -847,6 +905,8 @@ def create_app(
 
     @app.post("/api/chat/stream")
     async def stream_chat(request: ChatRequest, user: AuthUser = Depends(current_user)) -> StreamingResponse:
+        _ensure_guest_can_create_session(user, request.session_id)
+
         async def event_generator():
             yield _stream_event("status", text="正在分析问题")
             result = None
@@ -1065,6 +1125,7 @@ def create_app(
         request: CreateTopicRefreshJobRequest,
         user: AuthUser = Depends(current_user),
     ) -> SchedulerJobResponse:
+        _ensure_registered_user(user)
         try:
             record = _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
         except LookupError as exc:
@@ -1117,6 +1178,7 @@ def create_app(
 
     @app.post("/api/scheduler/jobs/{job_id}/pause", response_model=SchedulerJobResponse)
     def pause_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> SchedulerJobResponse:
+        _ensure_registered_user(user)
         try:
             _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             job = app.state.scheduler_service.pause_job(job_id)
@@ -1126,6 +1188,7 @@ def create_app(
 
     @app.post("/api/scheduler/jobs/{job_id}/resume", response_model=SchedulerJobResponse)
     def resume_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> SchedulerJobResponse:
+        _ensure_registered_user(user)
         try:
             _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             job = app.state.scheduler_service.resume_job(job_id)
@@ -1135,6 +1198,7 @@ def create_app(
 
     @app.post("/api/scheduler/jobs/{job_id}/run", response_model=JobRunResponse)
     async def run_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> JobRunResponse:
+        _ensure_registered_user(user)
         try:
             _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             run = await app.state.scheduler_service.run_job_now(job_id)

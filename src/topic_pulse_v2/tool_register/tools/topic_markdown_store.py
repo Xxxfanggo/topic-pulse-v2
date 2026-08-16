@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 TOPIC_MARKDOWN_STORE_TOOL_NAME = "topic_markdown_store"
 DEFAULT_ROOT = str(topics_dir())
+GUEST_USER_PREFIX = "guest_"
+GUEST_TOPIC_LIMIT = 3
 SECTION_BASIC_INFO = "## 基本信息"
 SECTION_SUMMARY = "## 摘要"
 SECTION_TIMELINE = "## 时间线"
@@ -228,6 +230,14 @@ class _TopicMarkdownStore:
 
     def topic_path(self, topic_name: str) -> Path:
         if self.user_id and self.topic_store is not None:
+            existing = self.topic_store.get_by_title(
+                user_id=self.user_id,
+                title=topic_name,
+            )
+            if existing is None and _is_guest_user_id(self.user_id):
+                topic_count = len(self.topic_store.list_topics(user_id=self.user_id))
+                if topic_count >= GUEST_TOPIC_LIMIT:
+                    raise ValueError("访客最多创建 3 个话题，请登录后继续。")
             topic = self.topic_store.create_or_get_topic(
                 user_id=self.user_id,
                 title=topic_name,
@@ -673,3 +683,7 @@ def _timeline_item_to_dict(item: TimelineItem) -> dict[str, Any]:
         "url": item.url,
         "summary": item.summary,
     }
+
+
+def _is_guest_user_id(user_id: str) -> bool:
+    return str(user_id or "").startswith(GUEST_USER_PREFIX)

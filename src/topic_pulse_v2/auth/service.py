@@ -56,6 +56,7 @@ class AuthUser:
     email: str
     status: str
     email_verified_at: datetime | None = None
+    is_guest: bool = False
 
 
 class EmailCodeSender(Protocol):

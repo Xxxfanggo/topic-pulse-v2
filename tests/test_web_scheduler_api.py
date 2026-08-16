@@ -8,6 +8,7 @@ from unittest.mock import patch
 try:
     from fastapi.testclient import TestClient
 
+    from topic_pulse_v2.auth import AuthService, JwtCodec
     from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
     from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
     from topic_pulse_v2.topics import SQLiteTopicStore
@@ -41,6 +42,11 @@ class FakeChatRuntime:
         )()
 
 
+class RecordingSender:
+    def send_verification_code(self, *, email, code, purpose):
+        pass
+
+
 @unittest.skipIf(TestClient is None, "fastapi is not installed")
 class WebSchedulerApiTests(unittest.TestCase):
     def _scheduler_service(self, db_path: Path) -> SchedulerService:
@@ -50,6 +56,13 @@ class WebSchedulerApiTests(unittest.TestCase):
             store=SQLiteSchedulerStore(path=db_path),
             registry=registry,
             enabled=False,
+        )
+
+    def _auth_service(self, root: Path) -> AuthService:
+        return AuthService(
+            path=root / "auth.sqlite3",
+            sender=RecordingSender(),
+            jwt_codec=JwtCodec("test-secret"),
         )
 
     def test_topic_refresh_schedule_lifecycle(self):
@@ -196,6 +209,38 @@ class WebSchedulerApiTests(unittest.TestCase):
                     )
 
             self.assertEqual(response.status_code, 404)
+
+    def test_guest_cannot_create_topic_refresh_schedule(self):
+        with TemporaryDirectory() as temp_dir:
+            web_app_module = importlib.import_module("topic_pulse_v2_chat.web.app")
+            root = Path(temp_dir)
+            topics_dir = root / "topics"
+            topics_dir.mkdir()
+            guest_id = "guest_browser-123456"
+            topic_store = SQLiteTopicStore(db_path=root / "topics.sqlite3", topics_dir=topics_dir)
+            topic = topic_store.create_or_get_topic(user_id=guest_id, title="Memory Prices")
+            Path(topic.markdown_path).write_text(
+                "# Memory Prices\n\n## Summary\n\nTracked topic.\n",
+                encoding="utf-8",
+            )
+            scheduler = self._scheduler_service(root / "topic_pulse.sqlite3")
+
+            with patch.object(web_app_module, "_topic_store", return_value=topic_store):
+                with TestClient(
+                    create_app(
+                        chat_runtime=FakeChatRuntime(),
+                        scheduler_service=scheduler,
+                        auth_service=self._auth_service(root),
+                    )
+                ) as client:
+                    response = client.post(
+                        f"/api/topics/{topic.id}/schedule",
+                        headers={"X-Guest-Id": guest_id},
+                        json={"trigger": "interval", "interval_minutes": 30},
+                    )
+
+            self.assertEqual(response.status_code, 403)
+            self.assertIn("访客不能创建定时调度任务", response.json()["detail"])
 
 
 if __name__ == "__main__":

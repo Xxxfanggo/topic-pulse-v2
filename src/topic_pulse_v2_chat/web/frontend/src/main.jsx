@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Space, Typography, theme } from 'antd';
+import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Modal, Space, Typography, theme } from 'antd';
 import { ExportOutlined, LoginOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import AppSidebar from './components/AppSidebar.jsx';
 import ChatComposer from './components/ChatComposer.jsx';
@@ -35,7 +35,7 @@ import './styles.css';
 const { Header, Content } = Layout;
 const { Text } = Typography;
 
-function AuthPage({ onAuthenticated }) {
+function AuthPage({ onAuthenticated, embedded = false }) {
   const [mode, setMode] = useState('login');
   const [emailForCode, setEmailForCode] = useState('');
   const [codeSent, setCodeSent] = useState(false);
@@ -91,9 +91,7 @@ function AuthPage({ onAuthenticated }) {
     }
   }
 
-  return (
-    <div className="authShell">
-      <Card className="authCard">
+  const content = (
         <Space direction="vertical" size={18} className="authStack">
           <Flex justify="space-between" align="center">
             <div>
@@ -159,6 +157,16 @@ function AuthPage({ onAuthenticated }) {
             </Space>
           )}
         </Space>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <div className="authShell">
+      <Card className="authCard">
+        {content}
       </Card>
     </div>
   );
@@ -191,6 +199,7 @@ function TopicPulseApp() {
   const [todayHotspotsError, setTodayHotspotsError] = useState('');
   const [authUser, setAuthUser] = useState(getStoredAuthUser);
   const [authChecking, setAuthChecking] = useState(true);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const inputRef = useRef(null);
   const conversationPaneRef = useRef(null);
   const sessionLoadTokenRef = useRef(0);
@@ -232,6 +241,9 @@ function TopicPulseApp() {
     setSessionId(null);
     setChatSessions([]);
     navigate('/chat', { replace: true });
+    getCurrentUser()
+      .then(setAuthUser)
+      .catch(() => {});
   }
 
   function createNewChat() {
@@ -727,7 +739,9 @@ function TopicPulseApp() {
           routedSessionId={routedSessionId}
           sessionsError={sessionsError}
           sessionsLoading={sessionsLoading}
+          sessionLimit={authUser.is_guest ? 3 : null}
           userId={authUser.email}
+          isGuest={authUser.is_guest}
         />
 
         <Layout className="workspace">
@@ -750,9 +764,15 @@ function TopicPulseApp() {
             </Flex>
             <Space>
               <Button icon={<ExportOutlined />}>导出</Button>
-              <Button icon={<LogoutOutlined />} onClick={logout}>
-                Logout
-              </Button>
+              {authUser.is_guest ? (
+                <Button type="primary" icon={<LoginOutlined />} onClick={() => setAuthModalOpen(true)}>
+                  登录
+                </Button>
+              ) : (
+                <Button icon={<LogoutOutlined />} onClick={logout}>
+                  Logout
+                </Button>
+              )}
             </Space>
           </Header>
 
@@ -774,6 +794,7 @@ function TopicPulseApp() {
                     onResumeSchedule={resumeSchedule}
                     onRunSchedule={runScheduleNow}
                     onReloadSchedule={() => loadTopicSchedule(routedTopicId)}
+                    isGuest={authUser.is_guest}
                   />
                 ) : (
                   <TopicListPage
@@ -829,6 +850,24 @@ function TopicPulseApp() {
           )}
         </Layout>
       </Layout>
+
+      <Modal
+        title="登录或注册"
+        open={authModalOpen}
+        footer={null}
+        onCancel={() => setAuthModalOpen(false)}
+        destroyOnClose
+      >
+        <AuthPage
+          embedded
+          onAuthenticated={(user) => {
+            setAuthUser(user);
+            setAuthModalOpen(false);
+            loadChatSessions();
+            loadTodayHotspots();
+          }}
+        />
+      </Modal>
     </ConfigProvider>
   );
 }

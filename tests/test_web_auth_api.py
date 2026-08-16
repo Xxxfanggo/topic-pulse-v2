@@ -12,6 +12,7 @@ try:
     from topic_pulse_v2.auth import AuthService, JwtCodec
     from topic_pulse_v2.session import SQLiteSessionStore
     from topic_pulse_v2.topics import SQLiteTopicStore
+    from topic_pulse_v2.tool_register.tools.topic_markdown_store import topic_markdown_store
     from topic_pulse_v2_chat.web import create_app
 except ModuleNotFoundError:
     TestClient = None
@@ -111,6 +112,91 @@ class WebAuthApiTests(unittest.TestCase):
             self.assertEqual(chat.status_code, 200)
             self.assertEqual(chat.json()["user_id"], token_response.json()["user"]["id"])
             self.assertEqual(runtime.calls[0]["user_id"], token_response.json()["user"]["id"])
+
+    def test_guest_identity_can_use_authenticated_apis(self):
+        with TemporaryDirectory() as temp_dir:
+            sender = RecordingSender()
+            auth = self._auth_service(Path(temp_dir), sender)
+            runtime = FakeChatRuntime()
+            client = TestClient(create_app(auth_service=auth, chat_runtime=runtime))
+            headers = {"X-Guest-Id": "guest_browser-123456"}
+
+            me = client.get("/api/auth/me", headers=headers)
+            chat = client.post("/api/chat", headers=headers, json={"message": "hello"})
+
+            self.assertEqual(me.status_code, 200)
+            self.assertEqual(me.json()["id"], "guest_browser-123456")
+            self.assertTrue(me.json()["is_guest"])
+            self.assertEqual(chat.status_code, 200)
+            self.assertEqual(chat.json()["user_id"], "guest_browser-123456")
+            self.assertEqual(runtime.calls[0]["user_id"], "guest_browser-123456")
+
+    def test_guest_can_create_at_most_three_sessions(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sender = RecordingSender()
+            auth = self._auth_service(root, sender)
+            runtime = FakeChatRuntime()
+            session_store = SQLiteSessionStore(db_path=root / "sessions.sqlite3", sessions_dir=root / "sessions")
+            web_app_module = importlib.import_module("topic_pulse_v2_chat.web.app")
+            guest_id = "guest_browser-123456"
+
+            for index in range(3):
+                record = session_store.create_or_get_session(user_id=guest_id, session_id=f"session-{index}")
+                Path(record.markdown_path).write_text(
+                    "# Session\n\n## Messages\n\n"
+                    "<!-- message\n"
+                    '{"role": "user", "created_at": "2026-08-05T10:00:00+00:00", "metadata": {"type": "user_input"}}\n'
+                    "-->\n"
+                    "hello\n"
+                    "<!-- /message -->\n\n",
+                    encoding="utf-8",
+                )
+
+            with patch.object(web_app_module, "_session_index_store", return_value=session_store):
+                client = TestClient(create_app(auth_service=auth, chat_runtime=runtime))
+                blocked = client.post(
+                    "/api/chat",
+                    headers={"X-Guest-Id": guest_id},
+                    json={"message": "new chat"},
+                )
+                existing = client.post(
+                    "/api/chat",
+                    headers={"X-Guest-Id": guest_id},
+                    json={"message": "continue", "session_id": "session-1"},
+                )
+
+            self.assertEqual(blocked.status_code, 403)
+            self.assertIn("访客最多创建 3 个对话", blocked.json()["detail"])
+            self.assertEqual(existing.status_code, 200)
+            self.assertEqual(runtime.calls[0]["session_id"], "session-1")
+
+    def test_guest_can_create_at_most_three_topics(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            topic_store = SQLiteTopicStore(db_path=root / "topics.sqlite3", topics_dir=root / "topics")
+            tool_module = importlib.import_module("topic_pulse_v2.tool_register.tools.topic_markdown_store")
+            guest_id = "guest_browser-123456"
+
+            with patch.object(tool_module, "SQLiteTopicStore", return_value=topic_store):
+                for index in range(3):
+                    result = topic_markdown_store(
+                        f"Topic {index}",
+                        summary="summary",
+                        root_dir=str(root / "topics"),
+                        user_id=guest_id,
+                    )
+                    self.assertTrue(result["created"])
+
+                with self.assertRaises(ValueError) as context:
+                    topic_markdown_store(
+                        "Topic 4",
+                        summary="summary",
+                        root_dir=str(root / "topics"),
+                        user_id=guest_id,
+                    )
+
+            self.assertIn("访客最多创建 3 个话题", str(context.exception))
 
     def test_topics_are_scoped_to_authenticated_user(self):
         with TemporaryDirectory() as temp_dir:

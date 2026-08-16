@@ -32,6 +32,7 @@ export default function TopicDetailPage({
   onResumeSchedule,
   onRunSchedule,
   onReloadSchedule,
+  isGuest,
 }) {
   return (
     <div className="topicPage topicDetailPage">
@@ -64,6 +65,7 @@ export default function TopicDetailPage({
         onResume={onResumeSchedule}
         onRun={onRunSchedule}
         onReload={onReloadSchedule}
+        disabled={isGuest}
       />
 
       <Card className="topicDetailCard" loading={loading && !!topic}>

@@ -157,6 +157,7 @@ class AuthLoginRequest(BaseModel):
 class AuthUserResponse(BaseModel):
     id: str
     email: str
+    is_guest: bool = False
 
 
 class AuthTokenResponse(BaseModel):
