@@ -34,6 +34,7 @@ import './styles.css';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
+const APP_FONT_FAMILY = '"Microsoft YaHei", "微软雅黑", sans-serif';
 
 function AuthPage({ onAuthenticated, embedded = false }) {
   const [mode, setMode] = useState('login');
@@ -683,7 +684,7 @@ function TopicPulseApp() {
 
   if (authChecking) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
+      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { fontFamily: APP_FONT_FAMILY } }}>
         <div className="authShell">
           <Text type="secondary">Checking session...</Text>
         </div>
@@ -693,7 +694,7 @@ function TopicPulseApp() {
 
   if (!authUser) {
     return (
-      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
+      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { fontFamily: APP_FONT_FAMILY } }}>
         <AuthPage onAuthenticated={setAuthUser} />
       </ConfigProvider>
     );
@@ -709,8 +710,7 @@ function TopicPulseApp() {
           colorSuccess: '#10b981',
           colorWarning: '#f59e0b',
           borderRadius: 8,
-          fontFamily:
-            'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
+          fontFamily: APP_FONT_FAMILY,
         },
         components: {
           Layout: {
