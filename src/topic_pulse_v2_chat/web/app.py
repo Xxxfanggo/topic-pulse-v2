@@ -53,9 +53,6 @@ from topic_pulse_v2_chat.web.schemas import (
 from topic_pulse_v2_chat.web.react_service import ReactChatService, react_result_steps_to_dict
 
 FRONTEND_DIST_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
-FRONTEND_PUBLIC_DIR = Path(__file__).resolve().parent / "frontend" / "public"
-FAVICON_FILE = FRONTEND_DIST_DIR / "favicon.svg"
-FAVICON_FALLBACK_FILE = FRONTEND_PUBLIC_DIR / "favicon.svg"
 TOPICS_DIR = topics_dir()
 SESSION_DATA_DIR = session_data_dir()
 logger = logging.getLogger(__name__)
@@ -302,14 +299,6 @@ def _topic_refresh_trigger_args(request: CreateTopicRefreshJobRequest) -> tuple[
 
 def _stream_event(event_type: str, **payload) -> str:
     return json.dumps({"type": event_type, **payload}, ensure_ascii=False, default=str) + "\n"
-
-
-def _favicon_path() -> Path | None:
-    if FAVICON_FILE.exists():
-        return FAVICON_FILE
-    if FAVICON_FALLBACK_FILE.exists():
-        return FAVICON_FALLBACK_FILE
-    return None
 
 
 def _public_reasoning_text(value: object, limit: int = 96) -> str:
@@ -1265,13 +1254,6 @@ def create_app(
             **_model_data(summary),
             messages=_session_messages(messages),
         )
-
-    @app.get("/favicon.svg", include_in_schema=False)
-    def favicon_svg() -> FileResponse:
-        favicon_path = _favicon_path()
-        if favicon_path is None:
-            raise HTTPException(status_code=404, detail="Favicon not found")
-        return FileResponse(favicon_path)
 
     if FRONTEND_DIST_DIR.exists():
         assets_dir = FRONTEND_DIST_DIR / "assets"

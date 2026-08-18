@@ -95,7 +95,7 @@ class ChatWebAppTests(unittest.TestCase):
     def test_favicon_svg_is_served(self):
         client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
 
-        response = client.get("/favicon.svg")
+        response = client.get("/assets/favicon.svg")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("image/svg+xml", response.headers.get("content-type", ""))
