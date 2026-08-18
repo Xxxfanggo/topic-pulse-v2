@@ -92,6 +92,15 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual(chat.status_code, 503)
         self.assertIn("detail", chat.json())
 
+    def test_favicon_svg_is_served(self):
+        client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
+
+        response = client.get("/favicon.svg")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/svg+xml", response.headers.get("content-type", ""))
+        self.assertIn("<svg", response.text)
+
     def test_chat_formats_structured_answer_summary_only(self):
         class StructuredRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):
