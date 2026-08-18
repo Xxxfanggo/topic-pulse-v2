@@ -228,6 +228,51 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual("".join(deltas), "Hello stream")
         self.assertFalse(any("final_answer" in delta for delta in deltas))
 
+    def test_stream_chat_suppresses_partial_summary_json_shell(self):
+        class StreamingRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                raise AssertionError("chat fallback should not be used")
+
+            def chat_stream(self, *, user_id, message, session_id=None, metadata=None):
+                yield SimpleNamespace(type="status", data={"stage": "llm_start"})
+                yield SimpleNamespace(
+                    type="llm_delta",
+                    content='{"thought":"done","final_answer":"{\\"summary\\":\\"',
+                    data={},
+                )
+                yield SimpleNamespace(
+                    type="llm_delta",
+                    content='Hello stream\\",\\"items\\":[]}"}',
+                    data={},
+                )
+                yield SimpleNamespace(
+                    type="result",
+                    data={},
+                    result=SimpleNamespace(
+                        answer='{"summary":"Hello stream","items":[]}',
+                        session_id="session-visible-stream",
+                        completed=True,
+                        steps=[],
+                    ),
+                )
+
+        client = TestClient(create_app(chat_runtime=StreamingRuntime()))
+        with client.stream(
+            "POST",
+            "/api/chat/stream",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        ) as response:
+            body = response.read().decode("utf-8")
+
+        events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        deltas = [event["content"] for event in events if event["type"] == "delta"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual("".join(deltas), "Hello stream")
+        self.assertFalse(any('{"summary":"' in delta for delta in deltas))
+
     def test_stream_chat_emits_public_agent_steps(self):
         class StreamingRuntime:
             def chat(self, *, user_id, message, session_id=None, metadata=None):

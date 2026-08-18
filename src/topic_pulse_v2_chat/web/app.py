@@ -345,7 +345,11 @@ def _partial_display_answer(content: str) -> str:
     final_answer = _partial_json_string_value(answer, "final_answer")
     if final_answer:
         nested = _partial_display_answer(final_answer)
-        return nested or final_answer
+        if nested:
+            return nested
+        if final_answer.lstrip().startswith("{"):
+            return ""
+        return final_answer
 
     summary = _partial_json_string_value(answer, "summary")
     if summary:
