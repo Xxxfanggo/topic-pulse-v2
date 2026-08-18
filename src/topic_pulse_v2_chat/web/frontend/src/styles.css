@@ -1,6 +1,8 @@
 :root {
   --topbar-height: 64px;
   --composer-reserve: 154px;
+  --sider-width: 280px;
+  --sider-collapsed-width: 72px;
 
   color: #111827;
   background: #f7f8fc;
@@ -52,6 +54,11 @@ select {
   padding: 18px 14px;
 }
 
+.appSider.isCollapsed .siderInner {
+  align-items: center;
+  padding-inline: 10px;
+}
+
 .brandAvatar {
   background: linear-gradient(135deg, #111827, #3730a3);
   color: #a5f3fc;
@@ -70,13 +77,58 @@ select {
   flex: 0 0 auto;
 }
 
+.appSider.isCollapsed .brand {
+  justify-content: center;
+  width: 100%;
+}
+
+.appSider.isCollapsed .brandCopy,
+.appSider.isCollapsed .sectionTitle,
+.appSider.isCollapsed .sessionCopy,
+.appSider.isCollapsed .visitorCopy {
+  display: none;
+}
+
 .newChatButton {
   min-height: 38px;
   padding-inline: 14px;
 }
 
+.appSider.isCollapsed .newChatButton {
+  width: 44px;
+  min-width: 44px;
+  padding-inline: 0;
+}
+
 .navMenu {
   border-inline-end: 0 !important;
+}
+
+.appSider.isCollapsed .navMenu,
+.appSider.isCollapsed .navMenu.ant-menu-inline-collapsed {
+  width: 52px;
+}
+
+.appSider.isCollapsed .navMenu .ant-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 42px;
+  line-height: 42px;
+  margin-inline: 4px;
+  padding-inline: 0 !important;
+  text-align: center;
+}
+
+.appSider.isCollapsed .navMenu .ant-menu-item-icon {
+  margin-inline: 0 !important;
+  font-size: 18px;
+  line-height: 42px;
+}
+
+.appSider.isCollapsed .navMenu .ant-menu-title-content {
+  display: none;
 }
 
 .siderSection {
@@ -87,6 +139,12 @@ select {
   min-height: 0;
   overflow: hidden;
   padding-right: 2px;
+}
+
+.appSider.isCollapsed .siderSection {
+  width: 52px;
+  padding-right: 0;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .sectionTitle {
@@ -125,6 +183,20 @@ select {
   transition: background 160ms ease, border-color 160ms ease;
 }
 
+.appSider.isCollapsed .sessionList {
+  width: 52px;
+  overflow-x: hidden;
+}
+
+.appSider.isCollapsed .sessionItem {
+  display: flex;
+  justify-content: center;
+  width: 44px;
+  height: 42px;
+  padding: 0;
+  margin-inline: auto;
+}
+
 .sessionItem.active,
 .sessionItem:hover {
   border-color: #dcdcff;
@@ -146,6 +218,21 @@ select {
   background: #fbfcff;
 }
 
+.appSider.isCollapsed .visitorCard {
+  width: 44px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.appSider.isCollapsed .visitorCard .ant-card-body {
+  padding: 4px !important;
+}
+
+.appSider.isCollapsed .visitorCard .ant-flex {
+  justify-content: center;
+}
+
 .workspace {
   position: relative;
   min-width: 0;
@@ -156,7 +243,7 @@ select {
 .workspace::after {
   content: "";
   position: fixed;
-  left: 280px;
+  left: var(--sider-width);
   right: 0;
   bottom: 132px;
   height: 48px;
@@ -170,7 +257,7 @@ select {
 }
 
 .ant-layout-sider-collapsed ~ .workspace::after {
-  left: 0;
+  left: var(--sider-collapsed-width);
 }
 
 .topbar {
@@ -1410,9 +1497,9 @@ select {
 
 .composerCard {
   position: fixed;
-  left: calc(280px + (100vw - 280px) / 2);
+  left: calc(var(--sider-width) + (100vw - var(--sider-width)) / 2);
   bottom: 22px;
-  width: min(880px, calc(100vw - 280px - 56px));
+  width: min(880px, calc(100vw - var(--sider-width) - 56px));
   transform: translateX(-50%);
   border-color: rgb(223 227 244 / 82%);
   border-top-color: rgb(255 255 255 / 76%);
@@ -1427,8 +1514,8 @@ select {
 }
 
 .ant-layout-sider-collapsed ~ .workspace .composerCard {
-  left: 50%;
-  width: min(880px, calc(100vw - 56px));
+  left: calc(var(--sider-collapsed-width) + (100vw - var(--sider-collapsed-width)) / 2);
+  width: min(880px, calc(100vw - var(--sider-collapsed-width) - 56px));
 }
 
 .composerCard .ant-card-body {
@@ -1502,16 +1589,24 @@ select {
     display: none !important;
   }
 
-  .workspace::after,
-  .ant-layout-sider-collapsed ~ .workspace::after {
-    left: 0;
+  .workspace::after {
+    left: var(--sider-width);
     right: 0;
   }
 
-  .composerCard,
+  .ant-layout-sider-collapsed ~ .workspace::after {
+    left: var(--sider-collapsed-width);
+    right: 0;
+  }
+
+  .composerCard {
+    left: calc(var(--sider-width) + (100vw - var(--sider-width)) / 2);
+    width: min(880px, calc(100vw - var(--sider-width) - 56px));
+  }
+
   .ant-layout-sider-collapsed ~ .workspace .composerCard {
-    left: calc(280px + (100vw - 280px) / 2);
-    width: min(880px, calc(100vw - 280px - 56px));
+    left: calc(var(--sider-collapsed-width) + (100vw - var(--sider-collapsed-width)) / 2);
+    width: min(880px, calc(100vw - var(--sider-collapsed-width) - 56px));
   }
 }
 
