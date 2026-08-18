@@ -1,2 +1,0 @@
-﻿topic_pulse_v2
-topic_pulse_v2_chat
