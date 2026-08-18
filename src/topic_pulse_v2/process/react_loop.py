@@ -29,6 +29,10 @@ from topic_pulse_v2.context_trim import (
 from topic_pulse_v2.trace import log_event, log_markdown
 from topic_pulse_v2.llm_call import LLMClient, Message
 from topic_pulse_v2.memory import MemoryStore
+from .preference_memory import (
+    PreferenceMemoryExtractionProcess,
+    PreferenceMemoryExtractionRequest,
+)
 from topic_pulse_v2.session import SessionManager, SessionStatus
 from topic_pulse_v2.tool_call import ToolCallRequest, ToolCallResult, ToolExecutor
 from topic_pulse_v2.tool_register import ToolRegistry
@@ -47,7 +51,6 @@ class ReActConfig:
     session_history_token_budget: int = 80000
     session_history_recent_turns_on_over_budget: int = 5
     save_user_input_to_memory: bool = False
-    save_final_answer_to_memory: bool = False
     trace_log_path: str | None = field(default_factory=lambda: str(react_trace_log_path()))
     system_prompt: str = (
 
@@ -55,7 +58,7 @@ class ReActConfig:
         "你是一个基于 ReAct 流程运行的热点信息跟踪智能体。你的任务是围绕用户关心的新闻话题、热点话题或长期关注话题，结合联网搜索结果、本地话题记忆和会话历史，给出准确、结构化、可追溯的回答。\n\n"
         
         "# 输入上下文\n"
-        "你会收到：用户本次输入、最近会话历史、相关记忆、可用工具列表、以及工具执行后的观察结果。\n"
+        "你会收到：用户本次输入、最近会话历史、用户偏好、相关记忆、可用工具列表、以及工具执行后的观察结果。\n"
         "会话历史只用于理解指代关系和上下文，不代表最新事实；涉及最新进展时必须优先使用联网搜索结果。\n\n"
         
         "# 基础判断规则\n"
@@ -178,6 +181,7 @@ class ReActAgent:
         llm_client: LLMClient,
         tool_registry: ToolRegistry,
         memory_store: MemoryStore | None = None,
+        preference_memory_process: PreferenceMemoryExtractionProcess | None = None,
         session_manager: SessionManager | None = None,
         context_trimmer: ContextTrimmer | None = None,
         config: ReActConfig | None = None,
@@ -186,6 +190,7 @@ class ReActAgent:
         self._tool_registry = tool_registry
         self._tool_executor = ToolExecutor(tool_registry)
         self._memory_store = memory_store
+        self._preference_memory_process = preference_memory_process
         self._session_manager = session_manager
         self._context_trimmer = context_trimmer or PassthroughContextTrimmer()
         self._config = config or ReActConfig()
@@ -395,10 +400,15 @@ class ReActAgent:
                 tool_observations.get("topic_markdown_store"),
             )
 
-            if self._memory_store and self._config.save_final_answer_to_memory:
-                self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
             self._save_assistant_history(session_id, answer, completed)
             self._finish_session(session_id, completed)
+            self._schedule_preference_memory_extraction(
+                user_id=user_id,
+                query=query,
+                answer=answer,
+                session_id=session_id,
+                metadata=metadata,
+            )
             log_event(
                 self._config.trace_log_path,
                 "agent_finish",
@@ -698,10 +708,15 @@ class ReActAgent:
             answer,
             tool_observations.get("topic_markdown_store"),
         )
-        if self._memory_store and self._config.save_final_answer_to_memory:
-            self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
         self._save_assistant_history(session_id, answer, completed)
         self._finish_session(session_id, completed)
+        self._schedule_preference_memory_extraction(
+            user_id=user_id,
+            query=query,
+            answer=answer,
+            session_id=session_id,
+            metadata=metadata,
+        )
         log_event(
             self._config.trace_log_path,
             "agent_finish",
@@ -755,6 +770,52 @@ class ReActAgent:
         status = SessionStatus.COMPLETED if completed else SessionStatus.FAILED
         self._session_manager.transition(session_id, status)
 
+    def _schedule_preference_memory_extraction(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        answer: str,
+        session_id: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        if not self._preference_memory_process:
+            return
+        try:
+            future = self._preference_memory_process.schedule_after_turn(
+                PreferenceMemoryExtractionRequest(
+                    user_id=user_id,
+                    user_message=query,
+                    assistant_answer=answer,
+                    session_id=session_id,
+                    metadata=metadata or {},
+                )
+            )
+            if hasattr(future, "add_done_callback"):
+                future.add_done_callback(
+                    lambda item: self._log_preference_memory_future_error(item, session_id)
+                )
+        except Exception as exc:
+            log_event(
+                self._config.trace_log_path,
+                "preference_memory_schedule_error",
+                session_id=session_id,
+                step_index=None,
+                data={"error": str(exc)},
+            )
+
+    def _log_preference_memory_future_error(self, future: Any, session_id: str | None) -> None:
+        try:
+            future.result()
+        except Exception as exc:
+            log_event(
+                self._config.trace_log_path,
+                "preference_memory_extract_error",
+                session_id=session_id,
+                step_index=None,
+                data={"error": str(exc)},
+            )
+
     def _build_initial_messages(
         self,
         user_id: str,
@@ -765,6 +826,9 @@ class ReActAgent:
         tool_text = self._react_context.trim_context_extra_text(self._format_tools())
         memory_text = self._react_context.trim_memory_text(
             self._format_memories(user_id, query),
+        )
+        user_profile_text = self._react_context.trim_memory_text(
+            self._format_user_profile(user_id),
         )
         session_text = self._react_context.trim_context_extra_text(
             self._format_session(session_id),
@@ -787,6 +851,7 @@ class ReActAgent:
                     f"{system_prompt}\n\n"
                     f"当前系统时间：{current_time}\n\n"
                     f"可用工具：\n{tool_text}\n\n"
+                    f"用户偏好：\n{user_profile_text}\n\n"
                     f"相关记忆：\n{memory_text}\n\n"
                     f"本地已关注话题候选：\n{local_topic_text}\n\n"
                     f"会话上下文：\n{session_text}"
@@ -927,6 +992,30 @@ class ReActAgent:
         )
         if not memories:
             return "没有相关记忆。"
+        return "\n".join(f"- {record.content}" for record in memories)
+
+    def _format_user_profile(self, user_id: str) -> str:
+        if not self._memory_store:
+            return "未配置用户偏好记忆。"
+        try:
+            memories = self._memory_store.search(
+                user_id,
+                "",
+                limit=self._config.memory_limit,
+                metadata_filter={"type": "preference"},
+            )
+        except TypeError:
+            memories = [
+                item
+                for item in self._memory_store.search(
+                    user_id,
+                    "",
+                    limit=self._config.memory_limit,
+                )
+                if getattr(item, "metadata", {}).get("type") == "preference"
+            ]
+        if not memories:
+            return "没有已知用户偏好。"
         return "\n".join(f"- {record.content}" for record in memories)
 
     def _format_local_topic_candidates(self, query: str) -> str:
