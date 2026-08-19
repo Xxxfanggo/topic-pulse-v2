@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Card, Flex, Skeleton, Tag, Typography } from 'antd';
 import { ArrowLeftOutlined, CalendarOutlined } from '@ant-design/icons';
 import MarkdownView from '../components/MarkdownView.jsx';
+import TopicNotificationPanel from '../components/TopicNotificationPanel.jsx';
 import TopicSchedulePanel from '../components/TopicSchedulePanel.jsx';
 
 const { Text, Title } = Typography;
@@ -26,12 +27,18 @@ export default function TopicDetailPage({
   scheduleLoading,
   scheduleActionLoading,
   scheduleError,
+  notification,
+  notificationDeliveries,
+  notificationLoading,
+  notificationSaving,
+  notificationError,
   onBack,
   onCreateSchedule,
   onPauseSchedule,
   onResumeSchedule,
   onRunSchedule,
   onReloadSchedule,
+  onToggleEmailNotification,
   isGuest,
 }) {
   return (
@@ -65,6 +72,16 @@ export default function TopicDetailPage({
         onResume={onResumeSchedule}
         onRun={onRunSchedule}
         onReload={onReloadSchedule}
+        disabled={isGuest}
+      />
+
+      <TopicNotificationPanel
+        subscription={notification}
+        deliveries={notificationDeliveries}
+        loading={notificationLoading}
+        saving={notificationSaving}
+        error={notificationError}
+        onToggleEmail={onToggleEmailNotification}
         disabled={isGuest}
       />
 

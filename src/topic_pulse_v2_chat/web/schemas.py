@@ -103,6 +103,45 @@ class CreateTopicRefreshJobRequest(BaseModel):
     enabled: bool = Field(default=True, description="Whether the created topic refresh job is active.")
 
 
+class EmailNotificationSubscriptionRequest(BaseModel):
+    enabled: bool = Field(default=True, description="Whether email notifications are enabled.")
+    only_when_has_new: bool = Field(default=True, description="Only notify when new topic items are found.")
+    min_new_count: int = Field(default=1, ge=1, description="Minimum new item count before notifying.")
+
+
+class NotificationSubscriptionResponse(BaseModel):
+    id: str | None = None
+    user_id: str = ""
+    topic_id: str = ""
+    channel: str = "email"
+    target: str = ""
+    enabled: bool = False
+    only_when_has_new: bool = True
+    min_new_count: int = 1
+    digest_mode: str = "immediate"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class NotificationDeliveryResponse(BaseModel):
+    id: str
+    subscription_id: str
+    job_run_id: str
+    user_id: str
+    topic_id: str
+    channel: str
+    status: str
+    subject: str = ""
+    error: str = ""
+    provider_response: str = ""
+    created_at: str
+    sent_at: str | None = None
+
+
+class NotificationDeliveryListResponse(BaseModel):
+    deliveries: list[NotificationDeliveryResponse] = Field(default_factory=list)
+
+
 class SchedulerJobResponse(BaseModel):
     id: str
     task_name: str

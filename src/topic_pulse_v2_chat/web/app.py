@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import asyncio
 from contextlib import asynccontextmanager
@@ -19,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from topic_pulse_v2.auth import AuthService, AuthUser
 from topic_pulse_v2.config import load_env_file, session_data_dir, topics_dir
+from topic_pulse_v2.notifications import NotificationDispatcher, SQLiteNotificationStore
 from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.tool_register.tools.topic_schedule_create import set_active_topic_schedule_scheduler
@@ -38,11 +40,15 @@ from topic_pulse_v2_chat.web.schemas import (
     ChatRequest,
     ChatResponse,
     CreateTopicRefreshJobRequest,
+    EmailNotificationSubscriptionRequest,
     HealthResponse,
     HotspotRankingItemResponse,
     HotspotTodayResponse,
     JobRunListResponse,
     JobRunResponse,
+    NotificationDeliveryListResponse,
+    NotificationDeliveryResponse,
+    NotificationSubscriptionResponse,
     SchedulerJobListResponse,
     SchedulerJobResponse,
     SessionChatMessage,
@@ -122,6 +128,7 @@ GUEST_USER_PREFIX = "guest_"
 GUEST_SESSION_LIMIT = 3
 GUEST_LIMIT_ERROR = "访客最多创建 3 个对话，请登录后继续。"
 GUEST_SCHEDULE_ERROR = "访客不能创建定时调度任务，请登录后使用。"
+GUEST_NOTIFICATION_ERROR = "访客不能创建通知订阅，请登录后使用。"
 
 
 def _next_stream_event(iterator):
@@ -169,6 +176,10 @@ def _topic_store() -> SQLiteTopicStore:
 
 def _hotspot_store() -> SQLiteHotspotStore:
     return SQLiteHotspotStore()
+
+
+def _notification_store() -> SQLiteNotificationStore:
+    return SQLiteNotificationStore()
 
 
 def _topic_summary_from_record(record: TopicRecord) -> TopicSummary:
@@ -225,6 +236,46 @@ def _job_run_response(run) -> JobRunResponse:
         error=run.error,
         result_summary=run.result_summary,
         metadata=run.metadata,
+    )
+
+
+def _notification_subscription_response(subscription, *, user: AuthUser, topic_id: str) -> NotificationSubscriptionResponse:
+    if subscription is None:
+        return NotificationSubscriptionResponse(
+            user_id=user.id,
+            topic_id=topic_id,
+            target=user.email,
+            enabled=False,
+        )
+    return NotificationSubscriptionResponse(
+        id=subscription.id,
+        user_id=subscription.user_id,
+        topic_id=subscription.topic_id,
+        channel=subscription.channel,
+        target=subscription.target,
+        enabled=subscription.enabled,
+        only_when_has_new=subscription.only_when_has_new,
+        min_new_count=subscription.min_new_count,
+        digest_mode=subscription.digest_mode,
+        created_at=subscription.created_at.isoformat(),
+        updated_at=subscription.updated_at.isoformat(),
+    )
+
+
+def _notification_delivery_response(delivery) -> NotificationDeliveryResponse:
+    return NotificationDeliveryResponse(
+        id=delivery.id,
+        subscription_id=delivery.subscription_id,
+        job_run_id=delivery.job_run_id,
+        user_id=delivery.user_id,
+        topic_id=delivery.topic_id,
+        channel=delivery.channel,
+        status=delivery.status,
+        subject=delivery.subject,
+        error=delivery.error,
+        provider_response=delivery.provider_response,
+        created_at=delivery.created_at.isoformat(),
+        sent_at=delivery.sent_at.isoformat() if delivery.sent_at else None,
     )
 
 
@@ -657,8 +708,15 @@ def _ensure_registered_user(user: AuthUser) -> None:
         raise HTTPException(status_code=403, detail=GUEST_SCHEDULE_ERROR)
 
 
+def _ensure_registered_notification_user(user: AuthUser) -> None:
+    if user.is_guest:
+        raise HTTPException(status_code=403, detail=GUEST_NOTIFICATION_ERROR)
 
-def _create_scheduler_service(chat_runtime: ChatRuntime | None = None) -> SchedulerService:
+
+def _create_scheduler_service(
+    chat_runtime: ChatRuntime | None = None,
+    notification_dispatcher: NotificationDispatcher | None = None,
+) -> SchedulerService:
     registry = ScheduledTaskRegistry()
     register_builtin_tasks(registry, chat_runtime=chat_runtime)
     return SchedulerService(
@@ -666,6 +724,7 @@ def _create_scheduler_service(chat_runtime: ChatRuntime | None = None) -> Schedu
         registry=registry,
         timezone="Asia/Shanghai",
         enabled=True,
+        notification_dispatcher=notification_dispatcher,
     )
 
 
@@ -762,7 +821,11 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.scheduler_service = scheduler_service or _create_scheduler_service(app.state.chat_runtime)
+        app.state.notification_dispatcher.initialize()
+        app.state.scheduler_service = scheduler_service or _create_scheduler_service(
+            app.state.chat_runtime,
+            notification_dispatcher=app.state.notification_dispatcher,
+        )
         app.state.scheduler_service.start()
         set_active_topic_schedule_scheduler(app.state.scheduler_service)
         _ensure_default_hotspot_refresh_job(app.state.scheduler_service)
@@ -771,6 +834,7 @@ def create_app(
         finally:
             set_active_topic_schedule_scheduler(None)
             app.state.scheduler_service.shutdown(wait=False)
+            app.state.notification_store.close()
 
     app = FastAPI(
         title="Topic Pulse Chat",
@@ -780,6 +844,11 @@ def create_app(
     )
     app.state.chat_runtime = chat_runtime or ReactChatService()
     app.state.auth_service = auth_service or (AuthService() if auth_required else None)
+    app.state.notification_store = _notification_store()
+    app.state.notification_dispatcher = NotificationDispatcher(
+        store=app.state.notification_store,
+        app_base_url=os.getenv("TOPIC_PULSE_PUBLIC_BASE_URL", ""),
+    )
     if app.state.auth_service is not None:
         app.state.auth_service.initialize()
     app.add_middleware(
@@ -1055,6 +1124,60 @@ def create_app(
             raise HTTPException(status_code=404, detail="Topic not found")
         summary = _topic_summary_from_record(record)
         return TopicDetailResponse(**_model_data(summary), content=path.read_text(encoding="utf-8"))
+
+    @app.get("/api/topics/{topic_id}/notifications/email", response_model=NotificationSubscriptionResponse)
+    def get_topic_email_notification(
+        topic_id: str,
+        user: AuthUser = Depends(current_user),
+    ) -> NotificationSubscriptionResponse:
+        try:
+            _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        subscription = app.state.notification_store.get_subscription(
+            user_id=user.id,
+            topic_id=topic_id,
+            channel="email",
+        )
+        return _notification_subscription_response(subscription, user=user, topic_id=topic_id)
+
+    @app.put("/api/topics/{topic_id}/notifications/email", response_model=NotificationSubscriptionResponse)
+    def save_topic_email_notification(
+        topic_id: str,
+        request: EmailNotificationSubscriptionRequest,
+        user: AuthUser = Depends(current_user),
+    ) -> NotificationSubscriptionResponse:
+        _ensure_registered_notification_user(user)
+        try:
+            _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        subscription = app.state.notification_store.upsert_email_subscription(
+            user_id=user.id,
+            topic_id=topic_id,
+            target=user.email,
+            enabled=request.enabled,
+            only_when_has_new=request.only_when_has_new,
+            min_new_count=request.min_new_count,
+        )
+        return _notification_subscription_response(subscription, user=user, topic_id=topic_id)
+
+    @app.get("/api/topics/{topic_id}/notifications/deliveries", response_model=NotificationDeliveryListResponse)
+    def list_topic_notification_deliveries(
+        topic_id: str,
+        user: AuthUser = Depends(current_user),
+    ) -> NotificationDeliveryListResponse:
+        try:
+            _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        deliveries = app.state.notification_store.list_deliveries(
+            user_id=user.id,
+            topic_id=topic_id,
+        )
+        return NotificationDeliveryListResponse(
+            deliveries=[_notification_delivery_response(delivery) for delivery in deliveries]
+        )
 
     @app.get("/api/hotspots/today", response_model=HotspotTodayResponse)
     def get_today_hotspots(

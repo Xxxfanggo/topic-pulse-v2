@@ -142,3 +142,31 @@ export function runSchedulerJob(jobId) {
 export function getSchedulerJobRuns(jobId) {
   return requestJson(`/api/scheduler/jobs/${encodeURIComponent(jobId)}/runs`, {}, 'Run history load failed');
 }
+
+export function getTopicEmailNotification(topicId) {
+  return requestJson(
+    `/api/topics/${encodeURIComponent(topicId)}/notifications/email`,
+    {},
+    'Email notification load failed',
+  );
+}
+
+export function saveTopicEmailNotification(topicId, payload) {
+  return requestJson(
+    `/api/topics/${encodeURIComponent(topicId)}/notifications/email`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    'Email notification save failed',
+  );
+}
+
+export function getTopicNotificationDeliveries(topicId) {
+  return requestJson(
+    `/api/topics/${encodeURIComponent(topicId)}/notifications/deliveries`,
+    {},
+    'Notification delivery history load failed',
+  );
+}

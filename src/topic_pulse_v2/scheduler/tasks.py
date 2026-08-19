@@ -71,9 +71,12 @@ def refresh_topic(
     return {
         "status": "completed" if getattr(result, "completed", False) else "incomplete",
         "topic_name": resolved_topic_name,
+        "user_id": user_id,
         "new_count": new_count,
         "existing_count": existing_count,
         "update_status": topic_update.get("status", ""),
+        "new_items": topic_update.get("new_items") if isinstance(topic_update.get("new_items"), list) else [],
+        "existing_items": topic_update.get("existing_items") if isinstance(topic_update.get("existing_items"), list) else [],
         "session_id": getattr(result, "session_id", None),
         "summary": _extract_summary(getattr(result, "answer", "")),
     }

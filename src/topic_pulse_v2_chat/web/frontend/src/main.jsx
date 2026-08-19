@@ -18,6 +18,8 @@ import {
   getCurrentUser,
   getSchedulerJobRuns,
   getTodayHotspots,
+  getTopicEmailNotification,
+  getTopicNotificationDeliveries,
   getStoredAuthUser,
   getTopicSchedule,
   loginWithEmail,
@@ -26,6 +28,7 @@ import {
   requestRegistrationCode,
   resumeSchedulerJob,
   runSchedulerJob,
+  saveTopicEmailNotification,
   setAuthSession,
   verifyRegistration,
 } from './utils/api.js';
@@ -195,6 +198,11 @@ function TopicPulseApp() {
   const [topicScheduleLoading, setTopicScheduleLoading] = useState(false);
   const [topicScheduleActionLoading, setTopicScheduleActionLoading] = useState('');
   const [topicScheduleError, setTopicScheduleError] = useState('');
+  const [topicNotification, setTopicNotification] = useState(null);
+  const [topicNotificationDeliveries, setTopicNotificationDeliveries] = useState([]);
+  const [topicNotificationLoading, setTopicNotificationLoading] = useState(false);
+  const [topicNotificationSaving, setTopicNotificationSaving] = useState(false);
+  const [topicNotificationError, setTopicNotificationError] = useState('');
   const [todayHotspots, setTodayHotspots] = useState([]);
   const [todayHotspotsLoading, setTodayHotspotsLoading] = useState(false);
   const [todayHotspotsError, setTodayHotspotsError] = useState('');
@@ -380,6 +388,26 @@ function TopicPulseApp() {
     }
   }
 
+  async function loadTopicNotification(topicId) {
+    if (!topicId) return;
+    setTopicNotificationLoading(true);
+    setTopicNotificationError('');
+    try {
+      const [subscription, deliveriesPayload] = await Promise.all([
+        getTopicEmailNotification(topicId),
+        getTopicNotificationDeliveries(topicId),
+      ]);
+      setTopicNotification(subscription || null);
+      setTopicNotificationDeliveries(deliveriesPayload.deliveries || []);
+    } catch (error) {
+      setTopicNotification(null);
+      setTopicNotificationDeliveries([]);
+      setTopicNotificationError(error.message || 'Email 通知状态加载失败');
+    } finally {
+      setTopicNotificationLoading(false);
+    }
+  }
+
   async function createScheduleForCurrentTopic(payload) {
     if (!routedTopicId) return;
     setTopicScheduleActionLoading('create');
@@ -434,11 +462,32 @@ function TopicPulseApp() {
       setTopicScheduleRuns(data.runs || []);
       if (routedTopicId) {
         await loadTopicDetail(routedTopicId);
+        await loadTopicNotification(routedTopicId);
       }
     } catch (error) {
       setTopicScheduleError(error.message || '定时任务运行失败');
     } finally {
       setTopicScheduleActionLoading('');
+    }
+  }
+
+  async function toggleEmailNotification(enabled) {
+    if (!routedTopicId) return;
+    setTopicNotificationSaving(true);
+    setTopicNotificationError('');
+    try {
+      const subscription = await saveTopicEmailNotification(routedTopicId, {
+        enabled,
+        only_when_has_new: topicNotification?.only_when_has_new ?? true,
+        min_new_count: topicNotification?.min_new_count || 1,
+      });
+      setTopicNotification(subscription);
+      const deliveriesPayload = await getTopicNotificationDeliveries(routedTopicId);
+      setTopicNotificationDeliveries(deliveriesPayload.deliveries || []);
+    } catch (error) {
+      setTopicNotificationError(error.message || 'Email 通知设置保存失败');
+    } finally {
+      setTopicNotificationSaving(false);
     }
   }
 
@@ -498,16 +547,23 @@ function TopicPulseApp() {
       setTopicSchedule(null);
       setTopicScheduleRuns([]);
       setTopicScheduleError('');
+      setTopicNotification(null);
+      setTopicNotificationDeliveries([]);
+      setTopicNotificationError('');
       return;
     }
     if (routedTopicId) {
       loadTopicDetail(routedTopicId);
       loadTopicSchedule(routedTopicId);
+      loadTopicNotification(routedTopicId);
     } else {
       setSelectedTopic(null);
       setTopicSchedule(null);
       setTopicScheduleRuns([]);
       setTopicScheduleError('');
+      setTopicNotification(null);
+      setTopicNotificationDeliveries([]);
+      setTopicNotificationError('');
     }
   }, [activeView, routedTopicId]);
 
@@ -788,12 +844,18 @@ function TopicPulseApp() {
                     scheduleLoading={topicScheduleLoading}
                     scheduleActionLoading={topicScheduleActionLoading}
                     scheduleError={topicScheduleError}
+                    notification={topicNotification}
+                    notificationDeliveries={topicNotificationDeliveries}
+                    notificationLoading={topicNotificationLoading}
+                    notificationSaving={topicNotificationSaving}
+                    notificationError={topicNotificationError}
                     onBack={() => navigate('/topics')}
                     onCreateSchedule={createScheduleForCurrentTopic}
                     onPauseSchedule={pauseSchedule}
                     onResumeSchedule={resumeSchedule}
                     onRunSchedule={runScheduleNow}
                     onReloadSchedule={() => loadTopicSchedule(routedTopicId)}
+                    onToggleEmailNotification={toggleEmailNotification}
                     isGuest={authUser.is_guest}
                   />
                 ) : (
