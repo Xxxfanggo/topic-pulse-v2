@@ -14,6 +14,15 @@ from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
 from topic_pulse_v2.process.hotspot_agent import HotspotRunResult
 
 
+class RecordingNotificationDispatcher:
+    def __init__(self):
+        self.events = []
+
+    def dispatch_topic_refresh(self, event):
+        self.events.append(event)
+        return [SimpleNamespace(status="sent")]
+
+
 class FakeRefreshChatRuntime:
     def __init__(self):
         self.calls = []
@@ -145,6 +154,46 @@ class SchedulerServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(chat_runtime.calls[0]["metadata"]["source"], "scheduler")
                 self.assertEqual(chat_runtime.calls[0]["metadata"]["task"], "refresh_topic")
                 self.assertIn("Memory Prices", chat_runtime.calls[0]["message"])
+            finally:
+                store.close()
+
+    async def test_refresh_topic_dispatches_notifications_after_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chat_runtime = FakeRefreshChatRuntime()
+            dispatcher = RecordingNotificationDispatcher()
+            registry = ScheduledTaskRegistry()
+            register_builtin_tasks(registry, chat_runtime=chat_runtime)
+            store = SQLiteSchedulerStore(path=Path(temp_dir) / "topic_pulse.sqlite3")
+            try:
+                store.initialize()
+                store.save_job(
+                    ScheduledJob(
+                        id="job-refresh",
+                        task_name="refresh_topic",
+                        trigger="interval",
+                        trigger_args={"minutes": 5},
+                        kwargs={"topic_name": "Memory Prices"},
+                        metadata={
+                            "type": "topic_refresh",
+                            "topic_id": "topic-1",
+                            "user_id": "user-1",
+                        },
+                    )
+                )
+                service = SchedulerService(
+                    store=store,
+                    registry=registry,
+                    enabled=False,
+                    notification_dispatcher=dispatcher,
+                )
+
+                run = await service.run_job_now("job-refresh")
+
+                self.assertEqual(run.status, "success")
+                self.assertEqual(len(dispatcher.events), 1)
+                self.assertEqual(dispatcher.events[0].topic_id, "topic-1")
+                self.assertEqual(dispatcher.events[0].user_id, "user-1")
+                self.assertEqual(run.metadata["notifications"]["sent_count"], 1)
             finally:
                 store.close()
 

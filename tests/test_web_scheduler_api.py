@@ -9,6 +9,7 @@ try:
     from fastapi.testclient import TestClient
 
     from topic_pulse_v2.auth import AuthService, JwtCodec
+    from topic_pulse_v2.notifications import SQLiteNotificationStore
     from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
     from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
     from topic_pulse_v2.topics import SQLiteTopicStore
@@ -241,6 +242,46 @@ class WebSchedulerApiTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 403)
             self.assertIn("访客不能创建定时调度任务", response.json()["detail"])
+
+    def test_topic_email_notification_subscription_api(self):
+        with TemporaryDirectory() as temp_dir:
+            web_app_module = importlib.import_module("topic_pulse_v2_chat.web.app")
+            root = Path(temp_dir)
+            topics_dir = root / "topics"
+            topics_dir.mkdir()
+            topic_store = SQLiteTopicStore(db_path=root / "topics.sqlite3", topics_dir=topics_dir)
+            topic = topic_store.create_or_get_topic(user_id="anonymous-user-1", title="Memory Prices")
+            Path(topic.markdown_path).write_text(
+                "# Memory Prices\n\n## Summary\n\nTracked topic.\n",
+                encoding="utf-8",
+            )
+            scheduler = self._scheduler_service(root / "topic_pulse.sqlite3")
+            notification_store = SQLiteNotificationStore(path=root / "topic_pulse.sqlite3")
+
+            with patch.object(web_app_module, "_topic_store", return_value=topic_store):
+                with patch.object(web_app_module, "_notification_store", return_value=notification_store):
+                    with TestClient(
+                        create_app(
+                            chat_runtime=FakeChatRuntime(),
+                            scheduler_service=scheduler,
+                            auth_required=False,
+                        )
+                    ) as client:
+                        initial = client.get(f"/api/topics/{topic.id}/notifications/email")
+                        saved = client.put(
+                            f"/api/topics/{topic.id}/notifications/email",
+                            json={"enabled": True, "only_when_has_new": True, "min_new_count": 2},
+                        )
+                        deliveries = client.get(f"/api/topics/{topic.id}/notifications/deliveries")
+
+            self.assertEqual(initial.status_code, 200)
+            self.assertFalse(initial.json()["enabled"])
+            self.assertEqual(saved.status_code, 200)
+            self.assertTrue(saved.json()["enabled"])
+            self.assertEqual(saved.json()["target"], "anonymous@example.test")
+            self.assertEqual(saved.json()["min_new_count"], 2)
+            self.assertEqual(deliveries.status_code, 200)
+            self.assertEqual(deliveries.json()["deliveries"], [])
 
 
 if __name__ == "__main__":
