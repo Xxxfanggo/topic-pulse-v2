@@ -35,7 +35,7 @@ from .preference_memory import (
 )
 from topic_pulse_v2.session import SessionManager, SessionStatus
 from topic_pulse_v2.tool_call import ToolCallRequest, ToolCallResult, ToolExecutor
-from topic_pulse_v2.tool_register import ToolRegistry
+from topic_pulse_v2.tool_register.registry import ToolRegistry
 
 
 @dataclass(slots=True)

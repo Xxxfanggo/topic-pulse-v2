@@ -4,8 +4,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from topic_pulse_v2.information_search import HotNewsItem
-from topic_pulse_v2.process.hotspot_agent import HotspotAgent, HotspotRunRequest, SQLiteHotspotStore
+from topic_pulse_v2.process.hotspot_agent import HotspotAgent, HotspotRunRequest
 from topic_pulse_v2.tool_register import HOT_TOPIC_SEARCH_TOOL_NAME, ToolRegistry, hot_topic_search
+from topic_pulse_v2.topics import SQLiteHotspotStore
 
 
 class FakeHotNewsProvider:

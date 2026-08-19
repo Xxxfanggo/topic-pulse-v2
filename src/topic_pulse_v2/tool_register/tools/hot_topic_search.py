@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from topic_pulse_v2.config import database_path
-from topic_pulse_v2.process import SQLiteHotspotStore
+from topic_pulse_v2.topics import SQLiteHotspotStore
 
 if TYPE_CHECKING:
     from topic_pulse_v2.tool_register.registry import ToolRegistry

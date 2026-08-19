@@ -10,7 +10,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
-from uuid import uuid5, NAMESPACE_URL
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,9 +21,13 @@ from topic_pulse_v2.auth import AuthService, AuthUser
 from topic_pulse_v2.config import load_env_file, session_data_dir, topics_dir
 from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
+from topic_pulse_v2.tool_register.tools.topic_schedule_create import set_active_topic_schedule_scheduler
+from topic_pulse_v2.topics import (
+    create_topic_refresh_schedule as create_topic_refresh_schedule_job,
+    find_topic_refresh_job,
+)
 from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage, SQLiteSessionStore
-from topic_pulse_v2.topics import SQLiteTopicStore, TopicRecord
-from topic_pulse_v2.process import SQLiteHotspotStore
+from topic_pulse_v2.topics import SQLiteHotspotStore, SQLiteTopicStore, TopicRecord
 from topic_pulse_v2_chat.web.schemas import (
     AuthLoginRequest,
     AuthMessageResponse,
@@ -225,10 +228,6 @@ def _job_run_response(run) -> JobRunResponse:
     )
 
 
-def _topic_refresh_job_id(topic_id: str) -> str:
-    return f"topic-refresh-{uuid5(NAMESPACE_URL, f'topic-pulse/topic/{topic_id}')}"
-
-
 def _default_hotspot_refresh_job_id() -> str:
     return "hotspot-refresh-weibo-hourly"
 
@@ -260,21 +259,6 @@ def _ensure_default_hotspot_refresh_job(scheduler: SchedulerRuntime) -> None:
     )
 
 
-def _find_topic_refresh_job(
-    scheduler: SchedulerRuntime,
-    topic_id: str,
-    *,
-    user_id: str | None = None,
-) -> ScheduledJob | None:
-    for job in scheduler.list_jobs():
-        metadata = job.metadata or {}
-        if metadata.get("type") == "topic_refresh" and metadata.get("topic_id") == topic_id:
-            if user_id is not None and metadata.get("user_id") != user_id:
-                continue
-            return job
-    return None
-
-
 def _job_belongs_to_user(job: ScheduledJob, user_id: str) -> bool:
     metadata = job.metadata or {}
     return metadata.get("user_id") == user_id
@@ -285,16 +269,6 @@ def _get_user_scheduler_job(scheduler: SchedulerRuntime, job_id: str, user_id: s
         if job.id == job_id and _job_belongs_to_user(job, user_id):
             return job
     raise LookupError(f"Scheduled job not found: {job_id}")
-
-
-def _topic_refresh_trigger_args(request: CreateTopicRefreshJobRequest) -> tuple[str, dict]:
-    if request.trigger == "interval":
-        return "interval", {"minutes": request.interval_minutes}
-    if request.trigger == "cron":
-        if request.cron_hour is None or request.cron_minute is None:
-            raise HTTPException(status_code=422, detail="cron_hour and cron_minute are required for cron trigger")
-        return "cron", {"hour": request.cron_hour, "minute": request.cron_minute}
-    raise HTTPException(status_code=422, detail="trigger must be one of: interval, cron")
 
 
 def _stream_event(event_type: str, **payload) -> str:
@@ -790,10 +764,12 @@ def create_app(
     async def lifespan(app: FastAPI):
         app.state.scheduler_service = scheduler_service or _create_scheduler_service(app.state.chat_runtime)
         app.state.scheduler_service.start()
+        set_active_topic_schedule_scheduler(app.state.scheduler_service)
         _ensure_default_hotspot_refresh_job(app.state.scheduler_service)
         try:
             yield
         finally:
+            set_active_topic_schedule_scheduler(None)
             app.state.scheduler_service.shutdown(wait=False)
 
     app = FastAPI(
@@ -1137,36 +1113,25 @@ def create_app(
         path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        existing = _find_topic_refresh_job(app.state.scheduler_service, topic_id, user_id=user.id)
-        if existing is not None:
-            return _scheduler_job_response(existing)
-
-        topic = _topic_summary_from_record(record)
-        trigger, trigger_args = _topic_refresh_trigger_args(request)
-        now = datetime.now(timezone.utc)
-        job = ScheduledJob(
-            id=_topic_refresh_job_id(topic_id),
-            task_name="refresh_topic",
-            trigger=trigger,
-            trigger_args=trigger_args,
-            kwargs={
-                "topic_name": topic.title,
-                "user_id": user.id,
-            },
-            status="active" if request.enabled else "paused",
-            name=f"Refresh topic: {topic.title}",
-            description="Refresh one tracked topic from the web and update local Markdown memory.",
-            metadata={
-                "type": "topic_refresh",
-                "topic_id": topic.id,
-                "topic_title": topic.title,
-                "topic_filename": topic.filename,
-                "user_id": user.id,
-            },
-            created_at=now,
-            updated_at=now,
-        )
-        return _scheduler_job_response(app.state.scheduler_service.add_job(job))
+        try:
+            job, _ = create_topic_refresh_schedule_job(
+                scheduler=app.state.scheduler_service,
+                topic_store=_topic_store(),
+                user_id=user.id,
+                topic_id=topic_id,
+                trigger=request.trigger,
+                interval_minutes=request.interval_minutes,
+                cron_hour=request.cron_hour,
+                cron_minute=request.cron_minute,
+                enabled=request.enabled,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        return _scheduler_job_response(job)
 
     @app.get("/api/topics/{topic_id}/schedule", response_model=SchedulerJobResponse | None)
     def get_topic_refresh_schedule(topic_id: str, user: AuthUser = Depends(current_user)):
@@ -1177,7 +1142,7 @@ def create_app(
         path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        job = _find_topic_refresh_job(app.state.scheduler_service, topic_id, user_id=user.id)
+        job = find_topic_refresh_job(app.state.scheduler_service, topic_id, user_id=user.id)
         return _scheduler_job_response(job) if job is not None else None
 
     @app.post("/api/scheduler/jobs/{job_id}/pause", response_model=SchedulerJobResponse)

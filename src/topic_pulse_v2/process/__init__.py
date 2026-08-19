@@ -1,6 +1,8 @@
 """Agent business process orchestration."""
 
-from .hotspot_agent import HotspotAgent, HotspotRunRequest, HotspotRunResult, SQLiteHotspotStore
+from topic_pulse_v2.topics import SQLiteHotspotStore
+
+from .hotspot_agent import HotspotAgent, HotspotRunRequest, HotspotRunResult
 from .preference_memory import (
     PreferenceMemoryExtractionProcess,
     PreferenceMemoryExtractionRequest,

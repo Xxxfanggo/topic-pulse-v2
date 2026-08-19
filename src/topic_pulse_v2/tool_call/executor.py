@@ -6,9 +6,10 @@ import asyncio
 import inspect
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from topic_pulse_v2.tool_register import ToolRegistry
+if TYPE_CHECKING:
+    from topic_pulse_v2.tool_register.registry import ToolRegistry
 
 
 @dataclass(slots=True)
