@@ -80,6 +80,7 @@ export default function TopicSchedulePanel({
   onResume,
   onRun,
   onReload,
+  disabled = false,
 }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedOption, setSelectedOption] = useState(scheduleOptions[1].value);
@@ -89,6 +90,7 @@ export default function TopicSchedulePanel({
   );
 
   async function confirmCreate() {
+    if (disabled) return;
     await onCreate?.({ ...selectedPayload, enabled: true });
     setModalOpen(false);
   }
@@ -106,28 +108,29 @@ export default function TopicSchedulePanel({
             刷新状态
           </Button>
           {!schedule && (
-            <Button type="primary" icon={<ClockCircleOutlined />} onClick={() => setModalOpen(true)}>
+            <Button type="primary" icon={<ClockCircleOutlined />} onClick={() => setModalOpen(true)} disabled={disabled}>
               创建任务
             </Button>
           )}
           {schedule && (
-            <Button icon={<ThunderboltOutlined />} onClick={() => onRun?.(schedule.id)} loading={actionLoading === 'run'}>
+            <Button icon={<ThunderboltOutlined />} onClick={() => onRun?.(schedule.id)} loading={actionLoading === 'run'} disabled={disabled}>
               立即刷新
             </Button>
           )}
           {schedule?.status === 'active' && (
-            <Button icon={<PauseCircleOutlined />} onClick={() => onPause?.(schedule.id)} loading={actionLoading === 'pause'}>
+            <Button icon={<PauseCircleOutlined />} onClick={() => onPause?.(schedule.id)} loading={actionLoading === 'pause'} disabled={disabled}>
               暂停
             </Button>
           )}
           {schedule?.status === 'paused' && (
-            <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => onResume?.(schedule.id)} loading={actionLoading === 'resume'}>
+            <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => onResume?.(schedule.id)} loading={actionLoading === 'resume'} disabled={disabled}>
               恢复
             </Button>
           )}
         </Space>
       </Flex>
 
+      {disabled && <Alert type="info" showIcon message="访客模式不能创建或运行定时调度任务，登录后可使用。" className="topicAlert" />}
       {error && <Alert type="error" showIcon message={error} className="topicAlert" />}
 
       <div className="topicScheduleBody">

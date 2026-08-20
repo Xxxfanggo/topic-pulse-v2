@@ -1,5 +1,6 @@
 import React from 'react';
-import { Card, Flex, Tag, Typography } from 'antd';
+import { Card, Empty, Flex, Skeleton, Tag, Typography } from 'antd';
+import { FireOutlined } from '@ant-design/icons';
 import PulseGraph from './PulseGraph.jsx';
 
 const { Title, Paragraph, Text } = Typography;
@@ -27,7 +28,17 @@ const starterPrompts = [
   },
 ];
 
-export default function EmptyChatCanvas({ onPrompt }) {
+function hotspotPrompt(item) {
+  return `请分析今日热点「${item.title}」，说明事件背景、热度原因、最新进展和后续值得关注的风险。`;
+}
+
+export default function EmptyChatCanvas({
+  hotspotError = '',
+  hotspots = [],
+  hotspotsLoading = false,
+  onHotspotSelect,
+  onPrompt,
+}) {
   return (
     <div className="emptyCanvas">
       <PulseGraph />
@@ -38,13 +49,50 @@ export default function EmptyChatCanvas({ onPrompt }) {
           输入新闻、话题或追踪目标，系统会结合记忆、检索和 ReAct 推理返回分析结果。
         </Paragraph>
       </Flex>
+      <section className="hotspotBoard" aria-label="今日热点排行">
+        <Flex align="center" justify="space-between" className="hotspotHeader">
+          <Flex align="center" gap={8}>
+            <FireOutlined className="hotspotHeaderIcon" />
+            <Text strong>今日热点 Top 10</Text>
+          </Flex>
+          <Text type="secondary">点击填入输入框</Text>
+        </Flex>
+        {hotspotsLoading ? (
+          <div className="hotspotSkeleton">
+            <Skeleton active paragraph={{ rows: 3 }} title={false} />
+          </div>
+        ) : hotspots.length > 0 ? (
+          <div className="hotspotList">
+            {hotspots.slice(0, 10).map((item) => (
+              <button
+                key={item.topic_id || item.title}
+                type="button"
+                className="hotspotItem"
+                onClick={() => onHotspotSelect?.(hotspotPrompt(item))}
+              >
+                <span className="hotspotRank">{item.rank}</span>
+                <span className="hotspotCopy">
+                  <span className="hotspotTitle">{item.title}</span>
+                  <span className="hotspotMeta">
+                    {item.category || '热点'} · 热度 {Math.round(item.score || 0)} · {item.observation_count || 0} 次观测
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <Empty
+            className="hotspotEmpty"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={hotspotError || '暂无今日热点沉淀数据'}
+          />
+        )}
+      </section>
       <div className="promptGrid">
         {starterPrompts.map((item) => (
           <Card
             key={item.title}
-            hoverable
-            className="promptCard"
-            onClick={() => onPrompt(item.prompt)}
+            className="promptCard isStatic"
           >
             <Tag color="geekblue">{item.label}</Tag>
             <Title level={5}>{item.title}</Title>

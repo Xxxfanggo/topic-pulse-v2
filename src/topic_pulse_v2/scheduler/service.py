@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
+from dataclasses import replace
 from datetime import datetime
 from time import perf_counter
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
+
+from topic_pulse_v2.notifications import TopicRefreshNotification
 
 from .models import JobRun, ScheduledJob
 from .registry import ScheduledTaskRegistry
 from .store import SchedulerStore
 
 SUMMARY_FIELD_LIMIT = 500
+logger = logging.getLogger(__name__)
+
+
+class NotificationDispatcherRuntime(Protocol):
+    def dispatch_topic_refresh(self, event: TopicRefreshNotification):
+        ...
 
 
 class SchedulerService:
@@ -26,11 +36,13 @@ class SchedulerService:
         registry: ScheduledTaskRegistry,
         timezone: str = "Asia/Shanghai",
         enabled: bool = True,
+        notification_dispatcher: NotificationDispatcherRuntime | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
         self._timezone = timezone
         self._enabled = enabled
+        self._notification_dispatcher = notification_dispatcher
         self._scheduler: Any | None = None
 
     @property
@@ -110,6 +122,7 @@ class SchedulerService:
     ) -> None:
         if self._scheduler is None:
             return
+        job = _with_runtime_kwargs(job)
         self._scheduler.add_job(
             self._run_job,
             trigger=job.trigger,
@@ -124,6 +137,7 @@ class SchedulerService:
         )
 
     async def _run_job(self, job: ScheduledJob) -> JobRun:
+        job = _with_runtime_kwargs(job)
         started = perf_counter()
         run = JobRun(
             id=str(uuid4()),
@@ -140,6 +154,9 @@ class SchedulerService:
             run.status = "success"
             run.result_summary = self._result_summary(result)
             run.metadata = {"task_metadata": task.metadata}
+            notification_metadata = self._dispatch_notifications(job, run, result)
+            if notification_metadata:
+                run.metadata["notifications"] = notification_metadata
         except Exception as exc:
             run.status = "failed"
             run.error = f"{type(exc).__name__}: {exc}"
@@ -161,6 +178,42 @@ class SchedulerService:
             )
         return str(result)
 
+    def _dispatch_notifications(self, job: ScheduledJob, run: JobRun, result: Any) -> dict:
+        if self._notification_dispatcher is None or job.task_name != "refresh_topic":
+            return {}
+        if not isinstance(result, dict):
+            return {}
+
+        metadata = job.metadata or {}
+        user_id = str(result.get("user_id") or job.kwargs.get("user_id") or metadata.get("user_id") or "").strip()
+        topic_id = str(result.get("topic_id") or metadata.get("topic_id") or "").strip()
+        if not user_id or not topic_id:
+            return {"status": "skipped", "reason": "missing user_id or topic_id"}
+
+        event = TopicRefreshNotification(
+            job_id=job.id,
+            job_run_id=run.id,
+            user_id=user_id,
+            topic_id=topic_id,
+            topic_title=str(result.get("topic_name") or metadata.get("topic_title") or "").strip(),
+            result=result,
+        )
+        try:
+            deliveries = self._notification_dispatcher.dispatch_topic_refresh(event)
+        except Exception as exc:
+            logger.exception("Notification dispatch failed.")
+            return {
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        return {
+            "status": "completed",
+            "delivery_count": len(deliveries or []),
+            "sent_count": sum(1 for item in deliveries or [] if getattr(item, "status", "") == "sent"),
+            "failed_count": sum(1 for item in deliveries or [] if getattr(item, "status", "") == "failed"),
+            "skipped_count": sum(1 for item in deliveries or [] if getattr(item, "status", "") == "skipped"),
+        }
+
 
 def _truncate_summary_fields(value: Any) -> Any:
     if isinstance(value, dict):
@@ -171,6 +224,19 @@ def _truncate_summary_fields(value: Any) -> Any:
     if isinstance(value, list):
         return [_truncate_summary_fields(item) for item in value]
     return value
+
+
+def _with_runtime_kwargs(job: ScheduledJob) -> ScheduledJob:
+    if job.task_name != "refresh_topic":
+        return job
+
+    kwargs = dict(job.kwargs or {})
+    if kwargs.get("user_id"):
+        return job
+
+    user_id = (job.metadata or {}).get("user_id")
+    kwargs["user_id"] = user_id or "scheduler"
+    return replace(job, kwargs=kwargs)
 
 
 def _truncate_text(value: str, limit: int = SUMMARY_FIELD_LIMIT) -> str:

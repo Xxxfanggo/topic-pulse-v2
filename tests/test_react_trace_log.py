@@ -5,6 +5,7 @@ from pathlib import Path
 
 from topic_pulse_v2.llm_call import LLMClient, LLMProvider, LLMRequest, LLMResponse
 from topic_pulse_v2.process import ReActAgent, ReActConfig
+from topic_pulse_v2.trace import resolve_trace_log_path
 from topic_pulse_v2.tool_register import ToolRegistry
 
 
@@ -75,9 +76,11 @@ class ReActTraceLogTests(unittest.TestCase):
                 config=ReActConfig(max_steps=2, trace_log_path=str(trace_path)),
             ).run(user_id="user-1", query="测试日志")
 
+            trace_content = resolve_trace_log_path(str(trace_path)).read_text(encoding="utf-8")
             events = [
                 json.loads(line)
-                for line in trace_path.read_text(encoding="utf-8").splitlines()
+                for line in trace_content.splitlines()
+                if line.startswith('{"timestamp"')
             ]
             event_types = [event["type"] for event in events]
 
@@ -87,8 +90,13 @@ class ReActTraceLogTests(unittest.TestCase):
             self.assertIn("tool_request", event_types)
             self.assertIn("tool_response", event_types)
             self.assertIn("agent_finish", event_types)
+            llm_request = next(event for event in events if event["type"] == "llm_request")
             tool_request = next(event for event in events if event["type"] == "tool_request")
             tool_response = next(event for event in events if event["type"] == "tool_response")
+            self.assertNotIn("prompt", llm_request["data"])
+            self.assertIn("## llm_prompt", trace_content)
+            self.assertIn("[system]", trace_content)
+            self.assertIn("[user]\n测试日志", trace_content)
             self.assertEqual(tool_request["data"]["arguments"], {"value": "测试"})
             self.assertEqual(tool_response["data"]["result"], {"echo": "测试"})
 

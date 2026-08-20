@@ -1,6 +1,8 @@
 import unittest
+import tempfile
+from pathlib import Path
 
-from topic_pulse_v2.memory import InMemoryStore
+from topic_pulse_v2.memory import InMemoryStore, SQLiteMemoryStore
 
 
 class MemoryTests(unittest.TestCase):
@@ -37,6 +39,35 @@ class MemoryTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             store.search("")
+
+    def test_sqlite_memory_store_persists_and_filters_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SQLiteMemoryStore(Path(temp_dir) / "memory.sqlite3")
+            preference = store.save(
+                "user-1",
+                "用户偏好先给结论再列来源。",
+                metadata={"type": "preference", "category": "style"},
+            )
+            store.save(
+                "user-1",
+                "普通运行日志。",
+                metadata={"type": "runtime_note"},
+            )
+            store.save(
+                "user-2",
+                "用户偏好详细回答。",
+                metadata={"type": "preference"},
+            )
+
+            reopened = SQLiteMemoryStore(Path(temp_dir) / "memory.sqlite3")
+            results = reopened.search(
+                "user-1",
+                "来源",
+                metadata_filter={"type": "preference"},
+            )
+
+            self.assertEqual([item.id for item in results], [preference.id])
+            self.assertEqual(results[0].metadata["category"], "style")
 
 
 if __name__ == "__main__":

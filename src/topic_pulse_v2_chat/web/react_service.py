@@ -8,9 +8,15 @@ from threading import Lock
 from typing import Any
 
 from topic_pulse_v2.llm_call import LLMClient, MiniMaxLLMProvider
-from topic_pulse_v2.memory import InMemoryStore
-from topic_pulse_v2.process import ReActAgent, ReActConfig, ReActResult, ReActStreamEvent
-from topic_pulse_v2.session import SessionManager
+from topic_pulse_v2.memory import SQLiteMemoryStore
+from topic_pulse_v2.process import (
+    PreferenceMemoryExtractionProcess,
+    ReActAgent,
+    ReActConfig,
+    ReActResult,
+    ReActStreamEvent,
+)
+from topic_pulse_v2.session import SessionManager, SQLiteSessionStore
 from topic_pulse_v2.tool_register import ToolRegistry
 
 
@@ -23,14 +29,20 @@ class ReactChatService:
             {"minimax": MiniMaxLLMProvider()},
             default_provider="minimax",
         )
-        self._memory = InMemoryStore()
-        self._session_manager = SessionManager()
+        self._memory = SQLiteMemoryStore()
+        self._session_manager = SessionManager(session_store=SQLiteSessionStore())
         self._tool_registry = ToolRegistry()
         self._config = ReActConfig(max_steps=20)
+        self._preference_memory_process = PreferenceMemoryExtractionProcess(
+            llm_client=self._llm_client,
+            memory_store=self._memory,
+            provider="minimax",
+        )
         self._agent = ReActAgent(
             llm_client=self._llm_client,
             tool_registry=self._tool_registry,
             memory_store=self._memory,
+            preference_memory_process=self._preference_memory_process,
             session_manager=self._session_manager,
             config=self._config,
         )
@@ -43,8 +55,7 @@ class ReactChatService:
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ReActResult:
-        # The current in-memory stores are process-local and not thread-safe.
-        # Keep requests serialized until a persistent store is introduced.
+        # Session state is still process-local, so keep chat turns serialized.
         with self._lock:
             return self._agent.run(
                 user_id=user_id,
@@ -62,8 +73,7 @@ class ReactChatService:
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Iterator[ReActStreamEvent]:
-        # The current in-memory stores are process-local and not thread-safe.
-        # Keep the whole stream serialized until a persistent store is introduced.
+        # Session state is still process-local, so keep the whole stream serialized.
         with self._lock:
             yield from self._agent.stream(
                 user_id=user_id,

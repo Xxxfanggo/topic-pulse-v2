@@ -1,12 +1,12 @@
 :root {
   --topbar-height: 64px;
   --composer-reserve: 154px;
+  --sider-width: 280px;
+  --sider-collapsed-width: 72px;
 
   color: #111827;
   background: #f7f8fc;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "Microsoft YaHei", sans-serif;
+  font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -18,6 +18,14 @@
 body {
   margin: 0;
   overflow: hidden;
+}
+
+body,
+button,
+input,
+textarea,
+select {
+  font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
 }
 
 .appShell {
@@ -46,6 +54,11 @@ body {
   padding: 18px 14px;
 }
 
+.appSider.isCollapsed .siderInner {
+  align-items: center;
+  padding-inline: 10px;
+}
+
 .brandAvatar {
   background: linear-gradient(135deg, #111827, #3730a3);
   color: #a5f3fc;
@@ -57,16 +70,81 @@ body {
   display: grid;
 }
 
+.brand,
+.newChatButton,
+.navMenu,
+.visitorCard {
+  flex: 0 0 auto;
+}
+
+.appSider.isCollapsed .brand {
+  justify-content: center;
+  width: 100%;
+}
+
+.appSider.isCollapsed .brandCopy,
+.appSider.isCollapsed .sectionTitle,
+.appSider.isCollapsed .sessionCopy,
+.appSider.isCollapsed .visitorCopy {
+  display: none;
+}
+
+.newChatButton {
+  min-height: 38px;
+  padding-inline: 14px;
+}
+
+.appSider.isCollapsed .newChatButton {
+  width: 44px;
+  min-width: 44px;
+  padding-inline: 0;
+}
+
 .navMenu {
   border-inline-end: 0 !important;
+}
+
+.appSider.isCollapsed .navMenu,
+.appSider.isCollapsed .navMenu.ant-menu-inline-collapsed {
+  width: 52px;
+}
+
+.appSider.isCollapsed .navMenu .ant-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 42px;
+  line-height: 42px;
+  margin-inline: 4px;
+  padding-inline: 0 !important;
+  text-align: center;
+}
+
+.appSider.isCollapsed .navMenu .ant-menu-item-icon {
+  margin-inline: 0 !important;
+  font-size: 18px;
+  line-height: 42px;
+}
+
+.appSider.isCollapsed .navMenu .ant-menu-title-content {
+  display: none;
 }
 
 .siderSection {
   display: grid;
   gap: 8px;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding-right: 2px;
+}
+
+.appSider.isCollapsed .siderSection {
+  width: 52px;
+  padding-right: 0;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .sectionTitle {
@@ -80,6 +158,12 @@ body {
 .stepList {
   display: grid;
   gap: 8px;
+}
+
+.sessionList {
+  align-content: start;
+  min-height: 0;
+  overflow: auto;
 }
 
 .sessionItem {
@@ -97,6 +181,20 @@ body {
   text-align: left;
   cursor: pointer;
   transition: background 160ms ease, border-color 160ms ease;
+}
+
+.appSider.isCollapsed .sessionList {
+  width: 52px;
+  overflow-x: hidden;
+}
+
+.appSider.isCollapsed .sessionItem {
+  display: flex;
+  justify-content: center;
+  width: 44px;
+  height: 42px;
+  padding: 0;
+  margin-inline: auto;
 }
 
 .sessionItem.active,
@@ -120,6 +218,21 @@ body {
   background: #fbfcff;
 }
 
+.appSider.isCollapsed .visitorCard {
+  width: 44px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.appSider.isCollapsed .visitorCard .ant-card-body {
+  padding: 4px !important;
+}
+
+.appSider.isCollapsed .visitorCard .ant-flex {
+  justify-content: center;
+}
+
 .workspace {
   position: relative;
   min-width: 0;
@@ -130,8 +243,8 @@ body {
 .workspace::after {
   content: "";
   position: fixed;
-  left: 280px;
-  right: 320px;
+  left: var(--sider-width);
+  right: 0;
   bottom: 132px;
   height: 48px;
   pointer-events: none;
@@ -144,7 +257,7 @@ body {
 }
 
 .ant-layout-sider-collapsed ~ .workspace::after {
-  left: 0;
+  left: var(--sider-collapsed-width);
 }
 
 .topbar {
@@ -318,8 +431,122 @@ body {
   gap: 10px;
 }
 
+.hotspotBoard {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e0e7ff;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 88%), rgb(248 251 255 / 94%)),
+    #ffffff;
+  box-shadow: 0 14px 36px rgb(17 24 39 / 6%);
+  padding: 12px;
+}
+
+.hotspotHeader {
+  min-height: 26px;
+}
+
+.hotspotHeaderIcon {
+  color: #f59e0b;
+}
+
+.hotspotList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hotspotItem {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid #e6ecf8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 10px;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.hotspotItem:hover {
+  border-color: #c7d2fe;
+  background: #f8faff;
+  box-shadow: 0 10px 24px rgb(79 70 229 / 9%);
+  transform: translateY(-1px);
+}
+
+.hotspotRank {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #4f46e5;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.hotspotItem:nth-child(1) .hotspotRank,
+.hotspotItem:nth-child(2) .hotspotRank,
+.hotspotItem:nth-child(3) .hotspotRank {
+  background: #fff7ed;
+  color: #ea580c;
+}
+
+.hotspotCopy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.hotspotTitle,
+.hotspotMeta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotspotTitle {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.hotspotMeta {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.hotspotSkeleton {
+  min-height: 118px;
+  padding: 4px 2px;
+}
+
+.hotspotEmpty {
+  min-height: 112px;
+  padding: 4px 0 0;
+}
+
 .promptCard {
   min-height: 98px;
+}
+
+.promptCard.isStatic {
+  border-color: #e8edf7;
+  border-style: dashed;
+  background:
+    linear-gradient(180deg, rgb(248 250 252 / 86%), rgb(255 255 255 / 92%)),
+    #ffffff;
+  box-shadow: none;
 }
 
 .promptCard .ant-card-body {
@@ -330,14 +557,17 @@ body {
 
 .promptCard .ant-tag {
   width: fit-content;
+  opacity: .78;
 }
 
 .promptCard h5.ant-typography {
   margin: 0;
+  color: #334155;
 }
 
 .promptCard .ant-typography {
   margin-bottom: 0;
+  color: #64748b;
 }
 
 .messageList {
@@ -475,11 +705,29 @@ body {
   padding: 16px 18px;
 }
 
+.topicNotificationPanel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid #e3e7f2;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 82%);
+  box-shadow: 0 12px 34px rgb(17 24 39 / 5%);
+  padding: 16px 18px;
+}
+
 .topicScheduleHeader {
   min-width: 0;
 }
 
+.topicNotificationHeader {
+  min-width: 0;
+}
+
 .topicScheduleHeader h3.ant-typography {
+  margin: 2px 0;
+}
+
+.topicNotificationHeader h3.ant-typography {
   margin: 2px 0;
 }
 
@@ -488,7 +736,16 @@ body {
   gap: 14px;
 }
 
+.topicNotificationBody {
+  display: grid;
+  gap: 14px;
+}
+
 .topicScheduleLoading {
+  min-height: 74px;
+}
+
+.topicNotificationLoading {
   min-height: 74px;
 }
 
@@ -502,9 +759,42 @@ body {
   padding: 12px;
 }
 
+.topicNotificationMeta {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 190px) minmax(90px, 120px);
+  gap: 12px;
+  border: 1px solid #eef2ff;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 12px;
+}
+
 .topicScheduleMeta > div {
   display: grid;
   gap: 5px;
+  min-width: 0;
+}
+
+.topicNotificationMeta > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.topicNotificationIcon {
+  color: #0891b2;
+  font-size: 18px;
+}
+
+.topicDeliveryList {
+  display: grid;
+  gap: 8px;
+}
+
+.topicDeliveryItem {
+  display: grid;
+  gap: 5px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -1267,9 +1557,9 @@ body {
 
 .composerCard {
   position: fixed;
-  left: calc(280px + (100vw - 280px - 320px) / 2);
+  left: calc(var(--sider-width) + (100vw - var(--sider-width)) / 2);
   bottom: 22px;
-  width: min(840px, calc(100vw - 280px - 320px - 72px));
+  width: min(880px, calc(100vw - var(--sider-width) - 56px));
   transform: translateX(-50%);
   border-color: rgb(223 227 244 / 82%);
   border-top-color: rgb(255 255 255 / 76%);
@@ -1284,8 +1574,8 @@ body {
 }
 
 .ant-layout-sider-collapsed ~ .workspace .composerCard {
-  left: calc((100vw - 320px) / 2);
-  width: min(880px, calc(100vw - 320px - 72px));
+  left: calc(var(--sider-collapsed-width) + (100vw - var(--sider-collapsed-width)) / 2);
+  width: min(880px, calc(100vw - var(--sider-collapsed-width) - 56px));
 }
 
 .composerCard .ant-card-body {
@@ -1359,16 +1649,24 @@ body {
     display: none !important;
   }
 
-  .workspace::after,
-  .ant-layout-sider-collapsed ~ .workspace::after {
-    left: 0;
+  .workspace::after {
+    left: var(--sider-width);
     right: 0;
   }
 
-  .composerCard,
+  .ant-layout-sider-collapsed ~ .workspace::after {
+    left: var(--sider-collapsed-width);
+    right: 0;
+  }
+
+  .composerCard {
+    left: calc(var(--sider-width) + (100vw - var(--sider-width)) / 2);
+    width: min(880px, calc(100vw - var(--sider-width) - 56px));
+  }
+
   .ant-layout-sider-collapsed ~ .workspace .composerCard {
-    left: calc(280px + (100vw - 280px) / 2);
-    width: min(880px, calc(100vw - 280px - 56px));
+    left: calc(var(--sider-collapsed-width) + (100vw - var(--sider-collapsed-width)) / 2);
+    width: min(880px, calc(100vw - var(--sider-collapsed-width) - 56px));
   }
 }
 
@@ -1427,6 +1725,10 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .hotspotList {
+    grid-template-columns: 1fr;
+  }
+
   .topicPageHeader {
     align-items: flex-start !important;
     flex-direction: column;
@@ -1447,11 +1749,20 @@ body {
     flex-direction: column;
   }
 
+  .topicNotificationHeader {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
   .topicDetailTitleRow h2.ant-typography {
     font-size: 24px;
   }
 
   .topicScheduleMeta {
+    grid-template-columns: 1fr;
+  }
+
+  .topicNotificationMeta {
     grid-template-columns: 1fr;
   }
 
@@ -1493,4 +1804,20 @@ body {
   .composerActions .ant-tag {
     display: none;
   }
+}
+.authShell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f7f8fc;
+  padding: 24px;
+}
+
+.authCard {
+  width: min(420px, 100%);
+}
+
+.authStack {
+  width: 100%;
 }

@@ -9,11 +9,16 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from topic_pulse_v2.config import topics_dir
+from topic_pulse_v2.topics import SQLiteTopicStore
+
 if TYPE_CHECKING:
     from topic_pulse_v2.tool_register.registry import ToolRegistry
 
 TOPIC_MARKDOWN_STORE_TOOL_NAME = "topic_markdown_store"
-DEFAULT_ROOT = "data/topics"
+DEFAULT_ROOT = str(topics_dir())
+GUEST_USER_PREFIX = "guest_"
+GUEST_TOPIC_LIMIT = 3
 SECTION_BASIC_INFO = "## 基本信息"
 SECTION_SUMMARY = "## 摘要"
 SECTION_TIMELINE = "## 时间线"
@@ -47,6 +52,7 @@ def topic_markdown_store(
     keywords: list[str] | None = None,
     summary: str | None = None,
     root_dir: str = DEFAULT_ROOT,
+    user_id: str | None = None,
     current_status: str = "持续关注",
     created_at: str | None = None,
     operation: str = "auto",
@@ -55,7 +61,7 @@ def topic_markdown_store(
 
     if operation not in {"auto", "create", "update"}:
         raise ValueError("operation must be one of: auto, create, update.")
-    store = _TopicMarkdownStore(root_dir)
+    store = _TopicMarkdownStore(root_dir, user_id=user_id)
     normalized_content = _normalize_latest_content(latest_content)
     inferred_keywords = keywords or _extract_keywords(normalized_content)
     inferred_summary = summary or _extract_summary(normalized_content)
@@ -83,6 +89,7 @@ def topic_markdown_store(
         )
     appended_items = store.append_timeline_items(topic_name, inferred_timeline_items)
     document_after = store.update_summary(topic_name, inferred_summary) if inferred_summary else store.read_topic(topic_name)
+    topic_record = store.topic_record(topic_name)
     appended_keys = {store._timeline_key(item) for item in appended_items}
     existing_items = [
         item
@@ -92,6 +99,7 @@ def topic_markdown_store(
 
     return {
         "topic_name": document_after.name,
+        "topic_id": topic_record.id if topic_record else "",
         "path": document_after.path,
         "created": created,
         "operation": actual_operation,
@@ -214,11 +222,27 @@ register_tool = register_topic_markdown_store_tool
 
 
 class _TopicMarkdownStore:
-    def __init__(self, root_dir: str | Path = DEFAULT_ROOT) -> None:
+    def __init__(self, root_dir: str | Path = DEFAULT_ROOT, *, user_id: str | None = None) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.user_id = str(user_id or "").strip() or None
+        self.topic_store = SQLiteTopicStore(topics_dir=self.root_dir) if self.user_id else None
 
     def topic_path(self, topic_name: str) -> Path:
+        if self.user_id and self.topic_store is not None:
+            existing = self.topic_store.get_by_title(
+                user_id=self.user_id,
+                title=topic_name,
+            )
+            if existing is None and _is_guest_user_id(self.user_id):
+                topic_count = len(self.topic_store.list_topics(user_id=self.user_id))
+                if topic_count >= GUEST_TOPIC_LIMIT:
+                    raise ValueError("访客最多创建 3 个话题，请登录后继续。")
+            topic = self.topic_store.create_or_get_topic(
+                user_id=self.user_id,
+                title=topic_name,
+            )
+            return Path(topic.markdown_path).resolve()
         normalized_name = self._normalize_topic_name(topic_name)
         path = (self.root_dir / f"{normalized_name}.md").resolve()
         if self.root_dir not in path.parents and path != self.root_dir:
@@ -266,6 +290,7 @@ class _TopicMarkdownStore:
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        self._touch_topic(topic_name)
         return self.read_topic(topic_name)
 
     def read_topic(self, topic_name: str) -> TopicDocument:
@@ -303,6 +328,7 @@ class _TopicMarkdownStore:
         content = self._replace_section_body(document.content, SECTION_TIMELINE, updated_body)
         content = self._set_basic_info_value(content, "最近更新时间", self._now())
         Path(document.path).write_text(content, encoding="utf-8")
+        self._touch_topic(topic_name)
         return new_items
 
     def update_summary(self, topic_name: str, summary: str) -> TopicDocument:
@@ -314,6 +340,7 @@ class _TopicMarkdownStore:
         )
         content = self._set_basic_info_value(content, "最近更新时间", self._now())
         Path(document.path).write_text(content, encoding="utf-8")
+        self._touch_topic(topic_name)
         return self.read_topic(topic_name)
 
     def update_basic_info(
@@ -332,7 +359,18 @@ class _TopicMarkdownStore:
             content = self._set_basic_info_value(content, "当前状态", current_status)
         content = self._set_basic_info_value(content, "最近更新时间", self._now())
         Path(document.path).write_text(content, encoding="utf-8")
+        self._touch_topic(topic_name)
         return self.read_topic(topic_name)
+
+    def topic_record(self, topic_name: str):
+        if not self.user_id or self.topic_store is None:
+            return None
+        return self.topic_store.get_by_title(user_id=self.user_id, title=topic_name)
+
+    def _touch_topic(self, topic_name: str) -> None:
+        record = self.topic_record(topic_name)
+        if record is not None and self.topic_store is not None:
+            self.topic_store.touch_topic(record.id)
 
     @staticmethod
     def _normalize_topic_name(topic_name: str) -> str:
@@ -645,3 +683,7 @@ def _timeline_item_to_dict(item: TimelineItem) -> dict[str, Any]:
         "url": item.url,
         "summary": item.summary,
     }
+
+
+def _is_guest_user_id(user_id: str) -> bool:
+    return str(user_id or "").startswith(GUEST_USER_PREFIX)

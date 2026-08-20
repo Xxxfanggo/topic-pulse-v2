@@ -18,17 +18,24 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
+from topic_pulse_v2.config import react_trace_log_path
 from topic_pulse_v2.context_trim import (
     ContextTrimRequest,
     ContextTrimmer,
     PassthroughContextTrimmer,
+    ReActContextBudget,
+    ReActContextManager,
 )
-from topic_pulse_v2.trace import log_event
+from topic_pulse_v2.trace import log_event, log_markdown
 from topic_pulse_v2.llm_call import LLMClient, Message
 from topic_pulse_v2.memory import MemoryStore
+from .preference_memory import (
+    PreferenceMemoryExtractionProcess,
+    PreferenceMemoryExtractionRequest,
+)
 from topic_pulse_v2.session import SessionManager, SessionStatus
 from topic_pulse_v2.tool_call import ToolCallRequest, ToolCallResult, ToolExecutor
-from topic_pulse_v2.tool_register import ToolRegistry
+from topic_pulse_v2.tool_register.registry import ToolRegistry
 
 
 @dataclass(slots=True)
@@ -38,36 +45,49 @@ class ReActConfig:
     max_steps: int = 6
     memory_limit: int = 5
     session_history_limit: int = 12
+    system_prompt_token_budget: int = 10000
+    memory_token_budget: int = 10000
+    context_extra_token_budget: int = 50000
+    session_history_token_budget: int = 80000
+    session_history_recent_turns_on_over_budget: int = 5
     save_user_input_to_memory: bool = False
-    save_final_answer_to_memory: bool = False
-    trace_log_path: str | None = "logs/react_trace.jsonl"
+    trace_log_path: str | None = field(default_factory=lambda: str(react_trace_log_path()))
     system_prompt: str = (
 
         "# 角色与目标\n"
         "你是一个基于 ReAct 流程运行的热点信息跟踪智能体。你的任务是围绕用户关心的新闻话题、热点话题或长期关注话题，结合联网搜索结果、本地话题记忆和会话历史，给出准确、结构化、可追溯的回答。\n\n"
         
         "# 输入上下文\n"
-        "你会收到：用户本次输入、最近会话历史、相关记忆、可用工具列表、以及工具执行后的观察结果。\n"
+        "你会收到：用户本次输入、最近会话历史、用户偏好、相关记忆、可用工具列表、以及工具执行后的观察结果。\n"
         "会话历史只用于理解指代关系和上下文，不代表最新事实；涉及最新进展时必须优先使用联网搜索结果。\n\n"
         
         "# 基础判断规则\n"
         "1. 如果用户输入不是明确话题，或无法识别具体查询对象，不要编造回答，应引导用户补充具体话题。\n"
         "2. 当用户使用“最近”“近期”“最新进展”“现在怎么样了”等模糊时间表达时，默认转换为最近6个月。\n"
-        "3. 如果任务涉及最新新闻、价格、政策、人物动态、公司动态、技术进展等可能变化的信息，必须调用 doubao_search 联网查询。\n\n"
+        "3. 如果用户询问“今日热点”“热点排行”“当前热门事件”“今天持续高热的话题”“本地沉淀的热搜”等平台热点排行问题，必须优先调用 hot_topic_search 读取本地热点数据。\n"
+        "4. 如果任务涉及最新新闻、价格、政策、人物动态、公司动态、技术进展等可能变化的信息，且不是优先读取本地热点排行的场景，必须调用 doubao_search 联网查询。\n"
+        "5. 如果 hot_topic_search 返回 count=0 或没有可用热点，再说明本地暂无沉淀数据，并根据用户意图决定是否调用 doubao_search 补充联网信息。\n\n"
         
         "# 工具调用输出格式\n"
         "当你需要调用一个工具时，只返回一个 JSON 对象，不要输出 Markdown、解释文字或额外文本：\n"
         '{"thought": "简短说明为什么调用工具", "action": "工具英文name", "arguments": {"参数名": "参数值"}}\n'
-        "action 必须严格使用可用工具列表中的英文 name 字段，例如 doubao_search、topic_markdown_read_summary、topic_markdown_read_detail、topic_markdown_store。\n"
+        "action 必须严格使用可用工具列表中的英文 name 字段，例如 doubao_search、hot_topic_search、topic_markdown_read_summary、topic_markdown_read_detail、topic_markdown_store。\n"
         "禁止使用中文展示名作为 action，例如“豆包搜索工具”“话题记忆存储”。\n"
         "只要决定使用工具，就必须输出带 action 的 JSON；禁止只在 thought 中描述打算使用工具。\n\n"
         
         "# 关键工具参数要求\n"
         "1. 调用 doubao_search 时，arguments 必须包含 query，query 应是补全时间范围后的具体搜索词。例如：{\"query\": \"内存条价格走势 最近6个月 最新消息\"}。\n"
-        "2. 调用 topic_markdown_read_summary 时，arguments 必须包含 query，用于匹配本地已关注话题。\n"
-        "3. 调用 topic_markdown_read_detail 时，arguments 必须包含 topic_name 或 path，且必须来自 topic_markdown_read_summary 返回的候选结果。\n"
-        "4. 调用 topic_markdown_store 时，arguments 必须包含 topic_name、summary、latest_content 或 timeline_items；已有话题使用 operation=update，新话题使用 operation=create 或 auto。\n"
-        "5. topic_markdown_store 的 timeline_items 必须是提炼后的具体条目，条目应尽量包含 date、title、summary、source、url；source 优先使用搜索结果中的 site_name，url 使用搜索结果中的 url。\n\n"
+        "2. 调用 hot_topic_search 时，arguments 可包含 query、date、limit；用户没有指定日期时不要编造 date，让工具默认查询今天。例如：{\"query\": \"AI\", \"limit\": 10}。\n"
+        "3. 调用 topic_markdown_read_summary 时，arguments 必须包含 query，用于匹配本地已关注话题。\n"
+        "4. 调用 topic_markdown_read_detail 时，arguments 必须包含 topic_name 或 path，且必须来自 topic_markdown_read_summary 返回的候选结果。\n"
+        "5. 调用 topic_markdown_store 时，arguments 必须包含 topic_name、summary、latest_content 或 timeline_items；已有话题使用 operation=update，新话题使用 operation=create 或 auto。\n"
+        "6. topic_markdown_store 的 timeline_items 必须是提炼后的具体条目，条目应尽量包含 date、title、summary、source、url；source 优先使用搜索结果中的 site_name，url 使用搜索结果中的 url。\n\n"
+
+        "# 本地热点排行查询流程\n"
+        "1. 用户问今日热点、热点 Top、热门事件、持续高热话题、微博热搜沉淀结果时，先调用 hot_topic_search。\n"
+        "2. 如果用户只问总榜，query 可省略，limit 通常为 10。\n"
+        "3. 如果用户问某类或某个关键词是否热门，query 使用用户关键词。\n"
+        "4. 根据 hot_topic_search 返回的 rank、score、summary、why_hot、observation_count 组织回答；不得把没有返回的来源、发布时间或事实当作已知事实。\n\n"
         
         "# 长期关注话题决策流程\n"
         "1. 如果用户明确表达“帮我关注”“持续关注”“长期跟踪”“记录下来”“保存到本地”“维护时间线”等意图，必须进入 Markdown 话题记忆写入流程。\n"
@@ -161,6 +181,7 @@ class ReActAgent:
         llm_client: LLMClient,
         tool_registry: ToolRegistry,
         memory_store: MemoryStore | None = None,
+        preference_memory_process: PreferenceMemoryExtractionProcess | None = None,
         session_manager: SessionManager | None = None,
         context_trimmer: ContextTrimmer | None = None,
         config: ReActConfig | None = None,
@@ -169,9 +190,21 @@ class ReActAgent:
         self._tool_registry = tool_registry
         self._tool_executor = ToolExecutor(tool_registry)
         self._memory_store = memory_store
+        self._preference_memory_process = preference_memory_process
         self._session_manager = session_manager
         self._context_trimmer = context_trimmer or PassthroughContextTrimmer()
         self._config = config or ReActConfig()
+        self._react_context = ReActContextManager(
+            ReActContextBudget(
+                system_prompt_token_budget=self._config.system_prompt_token_budget,
+                memory_token_budget=self._config.memory_token_budget,
+                context_extra_token_budget=self._config.context_extra_token_budget,
+                session_history_token_budget=self._config.session_history_token_budget,
+                session_history_recent_turns_on_over_budget=(
+                    self._config.session_history_recent_turns_on_over_budget
+                ),
+            )
+        )
 
     def run(
         self,
@@ -189,7 +222,7 @@ class ReActAgent:
             raise ValueError("query cannot be empty.")
 
         session_id = self._ensure_session(session_id, user_id)
-        self._save_user_input_history(session_id, query)
+        self._save_user_input_history(session_id, query, request_metadata=metadata)
         if self._memory_store and self._config.save_user_input_to_memory:
             self._memory_store.save(user_id, query, metadata={"type": "user_input"})
 
@@ -215,6 +248,13 @@ class ReActAgent:
                     )
                 )
                 llm_messages = context.messages
+                log_markdown(
+                    self._config.trace_log_path,
+                    "llm_prompt",
+                    self._format_prompt_for_debug(llm_messages),
+                    session_id=session_id,
+                    step_index=index,
+                )
                 log_event(
                     self._config.trace_log_path,
                     "llm_request",
@@ -269,17 +309,16 @@ class ReActAgent:
                     raw_response=response.content,
                 )
                 steps.append(step)
-                messages.append(
-                    Message(
-                        role="assistant",
-                        content=response.content,
-                        metadata={
-                            "tool_calls": self._assistant_tool_calls(
-                                step.tool_calls,
-                            )
-                        },
-                    )
+                assistant_message = Message(
+                    role="assistant",
+                    content=response.content,
+                    metadata={
+                        "tool_calls": self._assistant_tool_calls(
+                            step.tool_calls,
+                        )
+                    },
                 )
+                messages.append(assistant_message)
 
                 if step.final_answer is not None:
                     answer = step.final_answer
@@ -287,11 +326,13 @@ class ReActAgent:
                     break
 
                 if step.tool_calls:
+                    self._save_internal_assistant_history(session_id, assistant_message, index)
                     for tool_call in step.tool_calls:
                         tool_request = ToolCallRequest(
                             name=tool_call["name"],
                             arguments=tool_call.get("args", {}),
                             call_id=tool_call.get("id"),
+                            metadata={"user_id": user_id},
                         )
                         log_event(
                             self._config.trace_log_path,
@@ -326,14 +367,14 @@ class ReActAgent:
                             step.tool_result = tool_result
                         if tool_result.success:
                             self._remember_tool_observation(tool_observations, tool_result)
-                        messages.append(
-                            Message(
-                                role="tool",
-                                name=tool_result.name,
-                                tool_call_id=tool_result.call_id,
-                                content=self._format_observation(tool_result),
-                            )
+                        tool_message = Message(
+                            role="tool",
+                            name=tool_result.name,
+                            tool_call_id=tool_result.call_id,
+                            content=self._format_observation(tool_result),
                         )
+                        messages.append(tool_message)
+                        self._save_internal_tool_history(session_id, tool_message, index)
                     step.observation = [
                         result.result if result.success else result.error
                         for result in step.tool_results
@@ -359,10 +400,15 @@ class ReActAgent:
                 tool_observations.get("topic_markdown_store"),
             )
 
-            if self._memory_store and self._config.save_final_answer_to_memory:
-                self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
             self._save_assistant_history(session_id, answer, completed)
             self._finish_session(session_id, completed)
+            self._schedule_preference_memory_extraction(
+                user_id=user_id,
+                query=query,
+                answer=answer,
+                session_id=session_id,
+                metadata=metadata,
+            )
             log_event(
                 self._config.trace_log_path,
                 "agent_finish",
@@ -402,7 +448,7 @@ class ReActAgent:
             raise ValueError("query cannot be empty.")
 
         session_id = self._ensure_session(session_id, user_id)
-        self._save_user_input_history(session_id, query)
+        self._save_user_input_history(session_id, query, request_metadata=metadata)
         yield ReActStreamEvent(type="status", session_id=session_id, data={"stage": "session_ready"})
 
         if self._memory_store and self._config.save_user_input_to_memory:
@@ -434,6 +480,13 @@ class ReActAgent:
                 )
             )
             llm_messages = context.messages
+            log_markdown(
+                self._config.trace_log_path,
+                "llm_prompt",
+                self._format_prompt_for_debug(llm_messages),
+                session_id=session_id,
+                step_index=index,
+            )
             log_event(
                 self._config.trace_log_path,
                 "llm_request",
@@ -526,13 +579,12 @@ class ReActAgent:
                 raw_response=response.content,
             )
             steps.append(step)
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=response.content,
-                    metadata={"tool_calls": self._assistant_tool_calls(step.tool_calls)},
-                )
+            assistant_message = Message(
+                role="assistant",
+                content=response.content,
+                metadata={"tool_calls": self._assistant_tool_calls(step.tool_calls)},
             )
+            messages.append(assistant_message)
 
             if step.final_answer is not None:
                 answer = step.final_answer
@@ -546,11 +598,13 @@ class ReActAgent:
                 break
 
             if step.tool_calls:
+                self._save_internal_assistant_history(session_id, assistant_message, index)
                 for tool_call in step.tool_calls:
                     tool_request = ToolCallRequest(
                         name=tool_call["name"],
                         arguments=tool_call.get("args", {}),
                         call_id=tool_call.get("id"),
+                        metadata={"user_id": user_id},
                     )
                     yield ReActStreamEvent(
                         type="tool_start",
@@ -596,14 +650,14 @@ class ReActAgent:
                         step.tool_result = tool_result
                     if tool_result.success:
                         self._remember_tool_observation(tool_observations, tool_result)
-                    messages.append(
-                        Message(
-                            role="tool",
-                            name=tool_result.name,
-                            tool_call_id=tool_result.call_id,
-                            content=self._format_observation(tool_result),
-                        )
+                    tool_message = Message(
+                        role="tool",
+                        name=tool_result.name,
+                        tool_call_id=tool_result.call_id,
+                        content=self._format_observation(tool_result),
                     )
+                    messages.append(tool_message)
+                    self._save_internal_tool_history(session_id, tool_message, index)
                     yield ReActStreamEvent(
                         type="tool_end",
                         session_id=session_id,
@@ -654,10 +708,15 @@ class ReActAgent:
             answer,
             tool_observations.get("topic_markdown_store"),
         )
-        if self._memory_store and self._config.save_final_answer_to_memory:
-            self._memory_store.save(user_id, answer, metadata={"type": "final_answer"})
         self._save_assistant_history(session_id, answer, completed)
         self._finish_session(session_id, completed)
+        self._schedule_preference_memory_extraction(
+            user_id=user_id,
+            query=query,
+            answer=answer,
+            session_id=session_id,
+            metadata=metadata,
+        )
         log_event(
             self._config.trace_log_path,
             "agent_finish",
@@ -692,6 +751,7 @@ class ReActAgent:
             session = self._session_manager.ensure(
                 session_id,
                 context={"user_id": user_id},
+                user_id=user_id,
             )
             if session.status in {
                 SessionStatus.COMPLETED,
@@ -701,7 +761,7 @@ class ReActAgent:
                 self._session_manager.transition(session_id, SessionStatus.ACTIVE)
             self._session_manager.set_context(session_id, "user_id", user_id)
             return session_id
-        session = self._session_manager.create(context={"user_id": user_id})
+        session = self._session_manager.create(context={"user_id": user_id}, user_id=user_id)
         return session.id
 
     def _finish_session(self, session_id: str | None, completed: bool) -> None:
@@ -710,17 +770,73 @@ class ReActAgent:
         status = SessionStatus.COMPLETED if completed else SessionStatus.FAILED
         self._session_manager.transition(session_id, status)
 
+    def _schedule_preference_memory_extraction(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        answer: str,
+        session_id: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        if not self._preference_memory_process:
+            return
+        try:
+            future = self._preference_memory_process.schedule_after_turn(
+                PreferenceMemoryExtractionRequest(
+                    user_id=user_id,
+                    user_message=query,
+                    assistant_answer=answer,
+                    session_id=session_id,
+                    metadata=metadata or {},
+                )
+            )
+            if hasattr(future, "add_done_callback"):
+                future.add_done_callback(
+                    lambda item: self._log_preference_memory_future_error(item, session_id)
+                )
+        except Exception as exc:
+            log_event(
+                self._config.trace_log_path,
+                "preference_memory_schedule_error",
+                session_id=session_id,
+                step_index=None,
+                data={"error": str(exc)},
+            )
+
+    def _log_preference_memory_future_error(self, future: Any, session_id: str | None) -> None:
+        try:
+            future.result()
+        except Exception as exc:
+            log_event(
+                self._config.trace_log_path,
+                "preference_memory_extract_error",
+                session_id=session_id,
+                step_index=None,
+                data={"error": str(exc)},
+            )
+
     def _build_initial_messages(
         self,
         user_id: str,
         query: str,
         session_id: str | None,
     ) -> list[Message]:
-        tool_text = self._format_tools()
-        memory_text = self._format_memories(user_id, query)
-        session_text = self._format_session(session_id)
-        local_topic_text = self._format_local_topic_candidates(query)
-        history_messages = self._session_history_messages(session_id)
+        system_prompt = self._react_context.trim_system_prompt(self._config.system_prompt)
+        tool_text = self._react_context.trim_context_extra_text(self._format_tools())
+        memory_text = self._react_context.trim_memory_text(
+            self._format_memories(user_id, query),
+        )
+        user_profile_text = self._react_context.trim_memory_text(
+            self._format_user_profile(user_id),
+        )
+        session_text = self._react_context.trim_context_extra_text(
+            self._format_session(session_id),
+        )
+        local_topic_text = self._react_context.trim_context_extra_text(
+            self._format_local_topic_candidates(query),
+        )
+        history_messages = self._session_history_messages(session_id, current_query=query)
         current_turn_in_history = (
             bool(history_messages)
             and history_messages[-1].role == "user"
@@ -732,9 +848,10 @@ class ReActAgent:
             Message(
                 role="system",
                 content=(
-                    f"{self._config.system_prompt}\n\n"
+                    f"{system_prompt}\n\n"
                     f"当前系统时间：{current_time}\n\n"
                     f"可用工具：\n{tool_text}\n\n"
+                    f"用户偏好：\n{user_profile_text}\n\n"
                     f"相关记忆：\n{memory_text}\n\n"
                     f"本地已关注话题候选：\n{local_topic_text}\n\n"
                     f"会话上下文：\n{session_text}"
@@ -744,34 +861,38 @@ class ReActAgent:
             *([] if current_turn_in_history else [Message(role="user", content=query)]),
         ]
 
-    def _session_history_messages(self, session_id: str | None) -> list[Message]:
+    def _session_history_messages(
+        self,
+        session_id: str | None,
+        *,
+        current_query: str | None = None,
+    ) -> list[Message]:
         if not self._session_manager or not session_id:
             return []
         history = self._session_manager.get_history(
             session_id,
-            limit=self._config.session_history_limit,
+            limit=None,
         )
-        messages: list[Message] = []
-        for item in history:
-            if item.role not in {"user", "assistant"}:
-                continue
-            if not item.content:
-                continue
-            messages.append(Message(role=item.role, content=item.content))
-        return messages
+        return self._react_context.session_history_messages(
+            history,
+            current_query=current_query,
+        )
 
     def _save_user_input_history(
         self,
         session_id: str | None,
         query: str,
+        *,
+        request_metadata: dict[str, Any] | None = None,
     ) -> None:
         if not self._session_manager or not session_id:
             return
+        metadata = {"type": "user_input", **self._session_history_metadata(request_metadata)}
         self._session_manager.append_history(
             session_id,
             "user",
             query,
-            metadata={"type": "user_input"},
+            metadata=metadata,
         )
 
     def _save_assistant_history(
@@ -788,6 +909,62 @@ class ReActAgent:
             answer,
             metadata={"type": "final_answer", "completed": completed},
         )
+
+    def _save_internal_assistant_history(
+        self,
+        session_id: str | None,
+        message: Message,
+        step_index: int,
+    ) -> None:
+        if not self._session_manager or not session_id:
+            return
+        self._session_manager.append_history(
+            session_id,
+            "assistant",
+            message.content,
+            metadata={
+                "type": "tool_call",
+                "visibility": "internal",
+                "step_index": step_index,
+                "tool_calls": message.metadata.get("tool_calls") or [],
+            },
+        )
+
+    def _save_internal_tool_history(
+        self,
+        session_id: str | None,
+        message: Message,
+        step_index: int,
+    ) -> None:
+        if not self._session_manager or not session_id:
+            return
+        self._session_manager.append_history(
+            session_id,
+            "tool",
+            message.content,
+            metadata={
+                "type": "tool_result",
+                "visibility": "internal",
+                "step_index": step_index,
+                "name": message.name,
+                "tool_call_id": message.tool_call_id,
+            },
+        )
+
+    @staticmethod
+    def _session_history_metadata(request_metadata: dict[str, Any] | None) -> dict[str, Any]:
+        if not request_metadata:
+            return {}
+        metadata: dict[str, Any] = {}
+        source = request_metadata.get("source")
+        if source:
+            metadata["source"] = source
+        task = request_metadata.get("task")
+        if task:
+            metadata["task"] = task
+        if source == "scheduler":
+            metadata["visibility"] = "hidden"
+        return metadata
 
     @staticmethod
     def _format_prompt_for_debug(messages: list[Message]) -> str:
@@ -815,6 +992,30 @@ class ReActAgent:
         )
         if not memories:
             return "没有相关记忆。"
+        return "\n".join(f"- {record.content}" for record in memories)
+
+    def _format_user_profile(self, user_id: str) -> str:
+        if not self._memory_store:
+            return "未配置用户偏好记忆。"
+        try:
+            memories = self._memory_store.search(
+                user_id,
+                "",
+                limit=self._config.memory_limit,
+                metadata_filter={"type": "preference"},
+            )
+        except TypeError:
+            memories = [
+                item
+                for item in self._memory_store.search(
+                    user_id,
+                    "",
+                    limit=self._config.memory_limit,
+                )
+                if getattr(item, "metadata", {}).get("type") == "preference"
+            ]
+        if not memories:
+            return "没有已知用户偏好。"
         return "\n".join(f"- {record.content}" for record in memories)
 
     def _format_local_topic_candidates(self, query: str) -> str:

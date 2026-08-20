@@ -54,6 +54,38 @@ class ToolCallTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([result.result for result in results], ["a", "b"])
 
+    def test_call_injects_user_id_when_handler_accepts_it(self):
+        registry = ToolRegistry()
+        registry.register("scoped", lambda value, user_id=None: f"{user_id}:{value}")
+        executor = ToolExecutor(registry)
+
+        result = executor.call_request(
+            ToolCallRequest(
+                name="scoped",
+                arguments={"value": "topic"},
+                metadata={"user_id": "user-1"},
+            )
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.result, "user-1:topic")
+
+    def test_call_does_not_inject_user_id_into_handlers_that_do_not_accept_it(self):
+        registry = ToolRegistry()
+        registry.register("echo", lambda value: value)
+        executor = ToolExecutor(registry)
+
+        result = executor.call_request(
+            ToolCallRequest(
+                name="echo",
+                arguments={"value": "topic"},
+                metadata={"user_id": "user-1"},
+            )
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.result, "topic")
+
 
 if __name__ == "__main__":
     unittest.main()

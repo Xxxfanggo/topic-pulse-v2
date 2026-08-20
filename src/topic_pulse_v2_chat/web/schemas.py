@@ -25,7 +25,7 @@ class SessionChatMessage(ChatMessage):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="User input message.")
-    user_id: str = Field(min_length=1, description="Anonymous or logged-in user id.")
+    user_id: str | None = Field(default=None, description="Deprecated. User id is derived from the auth token.")
     session_id: str | None = Field(default=None, description="Optional chat session id.")
     history: list[ChatMessage] = Field(default_factory=list, description="Recent chat history.")
 
@@ -58,6 +58,27 @@ class TopicDetailResponse(TopicSummary):
     content: str
 
 
+class HotspotRankingItemResponse(BaseModel):
+    topic_id: str
+    rank: int
+    score: float
+    title: str
+    summary: str = ""
+    why_hot: str = ""
+    category: str = ""
+    trend: str = ""
+    first_seen_at: str = ""
+    last_seen_at: str = ""
+    source_count: int = 0
+    observation_count: int = 0
+
+
+class HotspotTodayResponse(BaseModel):
+    date: str
+    updated_at: str = ""
+    items: list[HotspotRankingItemResponse] = Field(default_factory=list)
+
+
 class SessionSummary(BaseModel):
     id: str
     title: str
@@ -80,6 +101,45 @@ class CreateTopicRefreshJobRequest(BaseModel):
     cron_hour: int | None = Field(default=None, ge=0, le=23, description="Cron hour for daily refresh.")
     cron_minute: int | None = Field(default=None, ge=0, le=59, description="Cron minute for daily refresh.")
     enabled: bool = Field(default=True, description="Whether the created topic refresh job is active.")
+
+
+class EmailNotificationSubscriptionRequest(BaseModel):
+    enabled: bool = Field(default=True, description="Whether email notifications are enabled.")
+    only_when_has_new: bool = Field(default=True, description="Only notify when new topic items are found.")
+    min_new_count: int = Field(default=1, ge=1, description="Minimum new item count before notifying.")
+
+
+class NotificationSubscriptionResponse(BaseModel):
+    id: str | None = None
+    user_id: str = ""
+    topic_id: str = ""
+    channel: str = "email"
+    target: str = ""
+    enabled: bool = False
+    only_when_has_new: bool = True
+    min_new_count: int = 1
+    digest_mode: str = "immediate"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class NotificationDeliveryResponse(BaseModel):
+    id: str
+    subscription_id: str
+    job_run_id: str
+    user_id: str
+    topic_id: str
+    channel: str
+    status: str
+    subject: str = ""
+    error: str = ""
+    provider_response: str = ""
+    created_at: str
+    sent_at: str | None = None
+
+
+class NotificationDeliveryListResponse(BaseModel):
+    deliveries: list[NotificationDeliveryResponse] = Field(default_factory=list)
 
 
 class SchedulerJobResponse(BaseModel):
@@ -116,3 +176,34 @@ class JobRunResponse(BaseModel):
 
 class JobRunListResponse(BaseModel):
     runs: list[JobRunResponse] = Field(default_factory=list)
+
+
+class AuthRequestCodeRequest(BaseModel):
+    email: str = Field(min_length=3, description="Email address to verify.")
+
+
+class AuthRegisterVerifyRequest(BaseModel):
+    email: str = Field(min_length=3, description="Email address to register.")
+    code: str = Field(min_length=4, max_length=12, description="Email verification code.")
+    password: str = Field(min_length=8, description="Password.")
+
+
+class AuthLoginRequest(BaseModel):
+    email: str = Field(min_length=3, description="Email address.")
+    password: str = Field(min_length=1, description="Password.")
+
+
+class AuthUserResponse(BaseModel):
+    id: str
+    email: str
+    is_guest: bool = False
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: AuthUserResponse
+
+
+class AuthMessageResponse(BaseModel):
+    status: str = "ok"

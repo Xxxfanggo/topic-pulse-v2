@@ -8,6 +8,8 @@
 data/topic_pulse.sqlite3
 ```
 
+生产部署可通过 `TOPIC_PULSE_DATA_DIR=/app/data` 把数据库解析为 `/app/data/topic_pulse.sqlite3`。
+
 不要为调度服务创建独立数据库。
 
 ## 目录结构
@@ -19,7 +21,7 @@ src/topic_pulse_v2/scheduler/
   registry.py      任务名称到 Python callable 的注册表
   service.py       基于 APScheduler 的 SchedulerService 门面
   store.py         SchedulerStore 接口和 SQLiteSchedulerStore 实现
-  tasks.py         内置调度任务，例如 refresh_topic
+  tasks.py         内置调度任务，例如 refresh_topic、refresh_hotspots
   README.md        当前设计说明
 ```
 
@@ -64,6 +66,7 @@ src/topic_pulse_v2/scheduler/
 
 ```text
 refresh_topic -> refresh_topic(...)
+refresh_hotspots -> refresh_hotspots(...)
 cleanup_trace_logs -> cleanup_trace_logs(...)
 ```
 
@@ -104,6 +107,7 @@ create_app()
   -> 从 topic_pulse.sqlite3 读取 active 状态的 ScheduledJob
   -> APScheduler.add_job(...) 注册到调度引擎
   -> APScheduler.start()
+  -> 确保默认微博热点刷新任务存在
 ```
 
 这里需要区分两类“注册”：
@@ -168,7 +172,7 @@ POST /api/topics/{topic_id}/schedule
 
 接口执行流程：
 
-1. 根据 `topic_id` 定位 `data/topics/{topic_id}.md`。
+1. 根据 `topic_id` 定位运行期话题目录中的 Markdown 文件，默认是 `data/topics/{topic_id}.md`。
 2. 校验话题 Markdown 文件是否存在。
 3. 查询已有任务，判断该话题是否已经有刷新任务。
 4. 如果已存在，直接返回已有任务。
@@ -194,6 +198,38 @@ metadata.type = "topic_refresh"
 metadata.topic_id = topic.id
 metadata.topic_title = topic.title
 ```
+
+## 默认热点刷新任务
+
+`refresh_hotspots` 是平台级热点沉淀任务，不属于某个用户。FastAPI 启动时会在 `app.py` 中执行 `_ensure_default_hotspot_refresh_job(...)`，确保全局 SQLite 中存在一条微博热点刷新任务：
+
+```text
+id = hotspot-refresh-weibo-hourly
+task_name = refresh_hotspots
+trigger = interval
+trigger_args = {"hours": 1}
+kwargs = {"provider": "weibo"}
+metadata.type = "hotspot_refresh"
+metadata.provider = "weibo"
+```
+
+如果数据库中已经存在 `metadata.type = hotspot_refresh` 且 `metadata.provider = weibo` 的任务，则不会重复创建。
+
+默认执行链路：
+
+```text
+refresh_hotspots(provider="weibo")
+  -> create_hot_news_provider("weibo")
+  -> WeiboHotNewsProvider.fetch_hot_news()
+  -> HotspotAgent.run(...)
+  -> 写入 hot_news_snapshots
+  -> 合并或创建 hotspot_topics
+  -> 写入 hotspot_observations
+  -> 重算 daily_hotspot_rankings
+  -> 返回本次运行摘要
+```
+
+这条任务沉淀出的今日 Top 10 会被 Web 首页通过 `/api/hotspots/today` 读取并展示。
 
 ## 任务何时发生调度
 
@@ -264,6 +300,34 @@ summary
 
 这些内容会被 `SchedulerService._run_job(...)` 序列化后写入 `job_runs.result_summary`。
 
+对于 `refresh_hotspots`，实际执行链路是：
+
+```text
+refresh_hotspots(provider="weibo")
+  -> HotspotAgent 固定 pipeline
+  -> 热点 Provider 拉取外部热点
+  -> 保存原始快照
+  -> 读取今日已有热点上下文
+  -> LLM 语义归并/总结，或规则 fallback
+  -> 保存热点主题和小时级观测
+  -> 计算今日排行
+```
+
+`refresh_hotspots` 返回：
+
+```text
+date
+captured_at
+fetched_count
+normalized_count
+merged_topic_count
+ranking_count
+top_topics
+errors
+```
+
+这些内容同样会被写入 `job_runs.result_summary`。
+
 ## 当前调度 API
 
 ```text
@@ -274,6 +338,12 @@ POST /api/scheduler/jobs/{job_id}/pause
 POST /api/scheduler/jobs/{job_id}/resume
 POST /api/scheduler/jobs/{job_id}/run
 GET  /api/scheduler/jobs/{job_id}/runs
+```
+
+热点排行只读 API：
+
+```text
+GET /api/hotspots/today?limit=10
 ```
 
 ## 数据表
@@ -312,6 +382,15 @@ duration_ms
 error
 result_summary
 metadata
+```
+
+热点沉淀相关表也保存在同一个 SQLite 数据库中：
+
+```text
+hot_news_snapshots       每小时拉取的原始热点快照
+hotspot_topics           今日归并后的热点主题
+hotspot_observations     某个热点在某小时的观测记录
+daily_hotspot_rankings   今日热点排行结果
 ```
 
 ## 关闭链路

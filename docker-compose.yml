@@ -1,0 +1,30 @@
+#docker compose up -d 启动
+
+services:
+  topic-pulse-v2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-docker.m.daocloud.io/library/node:22-bookworm}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-docker.m.daocloud.io/library/python:3.10-slim}
+    image: topic-pulse-v2:local
+    container_name: topic-pulse-v2
+    restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      TOPIC_PULSE_DATA_DIR: /app/data
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    networks:
+      - reverse-proxy
+
+networks:
+  reverse-proxy:
+    external: true
+    name: ${DOCKER_PROXY_NETWORK:-nginx-proxy}

@@ -6,6 +6,9 @@ import json
 import re
 from typing import Protocol
 
+from topic_pulse_v2.information_search import create_hot_news_provider
+from topic_pulse_v2.process.hotspot_agent import HotspotAgent, HotspotRunRequest
+
 from .registry import ScheduledTaskRegistry
 
 
@@ -25,10 +28,18 @@ def refresh_topic(
     topic_name: str,
     *,
     chat_runtime: ChatRuntime | None = None,
-    user_id: str = "scheduler",
+    user_id: str | None = None,
     session_id: str | None = None,
 ) -> dict:
     """Refresh one tracked topic by reusing the existing chat runtime."""
+
+    if not user_id:
+        return {
+            "status": "skipped",
+            "topic_name": topic_name,
+            "new_count": 0,
+            "reason": "user_id is required for topic refresh",
+        }
 
     if chat_runtime is None:
         return {
@@ -60,9 +71,12 @@ def refresh_topic(
     return {
         "status": "completed" if getattr(result, "completed", False) else "incomplete",
         "topic_name": resolved_topic_name,
+        "user_id": user_id,
         "new_count": new_count,
         "existing_count": existing_count,
         "update_status": topic_update.get("status", ""),
+        "new_items": topic_update.get("new_items") if isinstance(topic_update.get("new_items"), list) else [],
+        "existing_items": topic_update.get("existing_items") if isinstance(topic_update.get("existing_items"), list) else [],
         "session_id": getattr(result, "session_id", None),
         "summary": _extract_summary(getattr(result, "answer", "")),
     }
@@ -77,10 +91,33 @@ def cleanup_trace_logs() -> dict[str, str]:
     }
 
 
+def refresh_hotspots(
+    *,
+    hotspot_agent: HotspotAgent | None = None,
+    provider: str = "weibo",
+) -> dict:
+    """Refresh and persist today's platform-level hot news ranking."""
+
+    agent = hotspot_agent or HotspotAgent(provider=create_hot_news_provider(provider))
+    result = agent.run(HotspotRunRequest(provider=provider))
+    return {
+        "status": result.status,
+        "date": result.date,
+        "captured_at": result.captured_at,
+        "fetched_count": result.fetched_count,
+        "normalized_count": result.normalized_count,
+        "merged_topic_count": result.merged_topic_count,
+        "ranking_count": result.ranking_count,
+        "top_topics": result.top_topics,
+        "errors": result.errors,
+    }
+
+
 def register_builtin_tasks(
     registry: ScheduledTaskRegistry,
     *,
     chat_runtime: ChatRuntime | None = None,
+    hotspot_agent: HotspotAgent | None = None,
 ) -> None:
     registry.register(
         "refresh_topic",
@@ -92,10 +129,19 @@ def register_builtin_tasks(
         description="Refresh one tracked topic.",
         replace=True,
     )
+    # registry.register(
+    #     "cleanup_trace_logs",
+    #     cleanup_trace_logs,
+    #     description="Clean scheduler or agent trace logs.",
+    #     replace=True,
+    # )
     registry.register(
-        "cleanup_trace_logs",
-        cleanup_trace_logs,
-        description="Clean scheduler or agent trace logs.",
+        "refresh_hotspots",
+        lambda **kwargs: refresh_hotspots(
+            hotspot_agent=hotspot_agent,
+            **kwargs,
+        ),
+        description="Refresh today's platform-level hot news ranking.",
         replace=True,
     )
 

@@ -4,15 +4,23 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 try:
     from fastapi.testclient import TestClient
 
-    from topic_pulse_v2_chat.web import create_app
+    from topic_pulse_v2.session import SQLiteSessionStore
+    from topic_pulse_v2.topics import SQLiteTopicStore
+    from topic_pulse_v2_chat.web import create_app as create_web_app
 except ModuleNotFoundError:
     TestClient = None
-    create_app = None
+    create_web_app = None
+
+
+def create_app(*args, **kwargs):
+    kwargs.setdefault("auth_required", False)
+    return create_web_app(*args, **kwargs)
 
 
 class FakeChatRuntime:
@@ -83,6 +91,15 @@ class ChatWebAppTests(unittest.TestCase):
 
         self.assertEqual(chat.status_code, 503)
         self.assertIn("detail", chat.json())
+
+    def test_favicon_svg_is_served(self):
+        client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
+
+        response = client.get("/assets/favicon.svg")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/svg+xml", response.headers.get("content-type", ""))
+        self.assertIn("<svg", response.text)
 
     def test_chat_formats_structured_answer_summary_only(self):
         class StructuredRuntime:
@@ -219,6 +236,51 @@ class ChatWebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual("".join(deltas), "Hello stream")
         self.assertFalse(any("final_answer" in delta for delta in deltas))
+
+    def test_stream_chat_suppresses_partial_summary_json_shell(self):
+        class StreamingRuntime:
+            def chat(self, *, user_id, message, session_id=None, metadata=None):
+                raise AssertionError("chat fallback should not be used")
+
+            def chat_stream(self, *, user_id, message, session_id=None, metadata=None):
+                yield SimpleNamespace(type="status", data={"stage": "llm_start"})
+                yield SimpleNamespace(
+                    type="llm_delta",
+                    content='{"thought":"done","final_answer":"{\\"summary\\":\\"',
+                    data={},
+                )
+                yield SimpleNamespace(
+                    type="llm_delta",
+                    content='Hello stream\\",\\"items\\":[]}"}',
+                    data={},
+                )
+                yield SimpleNamespace(
+                    type="result",
+                    data={},
+                    result=SimpleNamespace(
+                        answer='{"summary":"Hello stream","items":[]}',
+                        session_id="session-visible-stream",
+                        completed=True,
+                        steps=[],
+                    ),
+                )
+
+        client = TestClient(create_app(chat_runtime=StreamingRuntime()))
+        with client.stream(
+            "POST",
+            "/api/chat/stream",
+            json={
+                "user_id": "anonymous-user-1",
+                "message": "hello",
+            },
+        ) as response:
+            body = response.read().decode("utf-8")
+
+        events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        deltas = [event["content"] for event in events if event["type"] == "delta"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual("".join(deltas), "Hello stream")
+        self.assertFalse(any('{"summary":"' in delta for delta in deltas))
 
     def test_stream_chat_emits_public_agent_steps(self):
         class StreamingRuntime:
@@ -478,30 +540,30 @@ class ChatWebAppTests(unittest.TestCase):
     def test_topics_list_and_detail(self):
         with TemporaryDirectory() as temp_dir:
             topics_dir = Path(temp_dir)
-            topic_path = topics_dir / "test-topic.md"
+            topic_store = SQLiteTopicStore(db_path=topics_dir / "topic_pulse.sqlite3", topics_dir=topics_dir)
+            topic = topic_store.create_or_get_topic(user_id="anonymous-user-1", title="Test Topic")
+            topic_path = Path(topic.markdown_path)
             topic_path.write_text("# Test Topic\n\nThis is a topic summary.\n\n## Timeline\n\n- Node", encoding="utf-8")
 
             web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
 
-            original_topics_dir = web_app.TOPICS_DIR
-            web_app.TOPICS_DIR = topics_dir
-            try:
+            with patch.object(web_app, "_topic_store", return_value=topic_store):
                 client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
 
                 topics = client.get("/api/topics")
-                detail = client.get("/api/topics/test-topic")
+                detail = client.get(f"/api/topics/{topic.id}")
 
                 self.assertEqual(topics.status_code, 200)
                 self.assertEqual(topics.json()["topics"][0]["title"], "Test Topic")
                 self.assertEqual(detail.status_code, 200)
                 self.assertIn("This is a topic summary.", detail.json()["content"])
-            finally:
-                web_app.TOPICS_DIR = original_topics_dir
 
     def test_sessions_list_and_detail_from_markdown_history(self):
         with TemporaryDirectory() as temp_dir:
             sessions_dir = Path(temp_dir)
-            session_path = sessions_dir / "session-existing.md"
+            session_index = SQLiteSessionStore(db_path=sessions_dir / "topic_pulse.sqlite3", sessions_dir=sessions_dir)
+            session_record = session_index.create_or_get_session(user_id="anonymous-user-1", session_id="session-existing")
+            session_path = Path(session_record.markdown_path)
             session_path.write_text(
                 "# Session session-existing\n\n"
                 "## Messages\n\n"
@@ -509,6 +571,16 @@ class ChatWebAppTests(unittest.TestCase):
                 '{"role": "user", "created_at": "2026-08-05T10:00:00+00:00", "metadata": {"type": "user_input"}}\n'
                 "-->\n"
                 "hello\n"
+                "<!-- /message -->\n\n"
+                "<!-- message\n"
+                '{"role": "assistant", "created_at": "2026-08-05T10:00:01.500000+00:00", "metadata": {"type": "tool_call", "visibility": "internal", "tool_calls": [{"id": "call-1", "name": "lookup_topic", "args": {}, "type": "tool_call"}]}}\n'
+                "-->\n"
+                '{"thought":"call tool","action":"lookup_topic","arguments":{}}\n'
+                "<!-- /message -->\n\n"
+                "<!-- message\n"
+                '{"role": "tool", "created_at": "2026-08-05T10:00:01.700000+00:00", "metadata": {"type": "tool_result", "visibility": "internal", "name": "lookup_topic", "tool_call_id": "call-1"}}\n'
+                "-->\n"
+                '{"tool":"lookup_topic","success":true,"result":{"status":"ok"}}\n'
                 "<!-- /message -->\n\n"
                 "<!-- message\n"
                 '{"role": "assistant", "created_at": "2026-08-05T10:00:01+00:00", "metadata": {"type": "final_answer", "completed": true}}\n'
@@ -523,9 +595,7 @@ class ChatWebAppTests(unittest.TestCase):
 
             web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
 
-            original_session_data_dir = web_app.SESSION_DATA_DIR
-            web_app.SESSION_DATA_DIR = sessions_dir
-            try:
+            with patch.object(web_app, "_session_index_store", return_value=session_index):
                 client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
 
                 sessions = client.get("/api/sessions")
@@ -534,12 +604,56 @@ class ChatWebAppTests(unittest.TestCase):
                 self.assertEqual(sessions.status_code, 200)
                 self.assertEqual(sessions.json()["sessions"][0]["id"], "session-existing")
                 self.assertEqual(sessions.json()["sessions"][0]["title"], "hello")
+                self.assertEqual(sessions.json()["sessions"][0]["message_count"], 2)
                 self.assertEqual(detail.status_code, 200)
+                self.assertEqual(len(detail.json()["messages"]), 2)
                 self.assertEqual(detail.json()["messages"][0]["content"], "hello")
                 self.assertEqual(detail.json()["messages"][1]["content"], "## Insight\n\n- Alpha")
                 self.assertTrue(detail.json()["messages"][1]["completed"])
-            finally:
-                web_app.SESSION_DATA_DIR = original_session_data_dir
+
+    def test_sessions_api_hides_scheduler_sessions(self):
+        with TemporaryDirectory() as temp_dir:
+            sessions_dir = Path(temp_dir)
+            session_index = SQLiteSessionStore(db_path=sessions_dir / "topic_pulse.sqlite3", sessions_dir=sessions_dir)
+            visible_record = session_index.create_or_get_session(user_id="anonymous-user-1", session_id="session-visible")
+            hidden_record = session_index.create_or_get_session(user_id="anonymous-user-1", session_id="session-scheduler")
+            visible_path = Path(visible_record.markdown_path)
+            visible_path.write_text(
+                "# Session session-visible\n\n"
+                "## Messages\n\n"
+                "<!-- message\n"
+                '{"role": "user", "created_at": "2026-08-05T10:00:00+00:00", "metadata": {"type": "user_input"}}\n'
+                "-->\n"
+                "hello\n"
+                "<!-- /message -->\n\n",
+                encoding="utf-8",
+            )
+            hidden_path = Path(hidden_record.markdown_path)
+            hidden_path.write_text(
+                "# Session session-scheduler\n\n"
+                "## Messages\n\n"
+                "<!-- message\n"
+                '{"role": "user", "created_at": "2026-08-05T11:00:00+00:00", "metadata": {"type": "user_input", "source": "scheduler", "visibility": "hidden"}}\n'
+                "-->\n"
+                "refresh topic\n"
+                "<!-- /message -->\n\n",
+                encoding="utf-8",
+            )
+
+            web_app = importlib.import_module("topic_pulse_v2_chat.web.app")
+
+            with patch.object(web_app, "_session_index_store", return_value=session_index):
+                client = TestClient(create_app(chat_runtime=FakeChatRuntime()))
+
+                sessions = client.get("/api/sessions")
+                hidden_detail = client.get("/api/sessions/session-scheduler")
+
+                self.assertEqual(sessions.status_code, 200)
+                self.assertEqual(
+                    [session["id"] for session in sessions.json()["sessions"]],
+                    ["session-visible"],
+                )
+                self.assertEqual(hidden_detail.status_code, 404)
 
 
 if __name__ == "__main__":

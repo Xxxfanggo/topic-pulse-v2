@@ -8,14 +8,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
 
+from topic_pulse_v2.config import database_path
+
 from .base import Database, Params, Row
 
 
 class SQLiteDatabase(Database):
     """Thin SQLite adapter behind the project database interface."""
 
-    def __init__(self, path: str | Path = "data/topic_pulse.sqlite3") -> None:
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = Path(path) if path is not None else database_path()
         self._connection: sqlite3.Connection | None = None
         self._transaction_depth = 0
         self._lock = RLock()

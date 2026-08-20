@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
-import { Button, ConfigProvider, Flex, Layout, Space, Typography, theme } from 'antd';
-import { ExportOutlined, LoginOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, ConfigProvider, Flex, Form, Input, Layout, Modal, Space, Typography, theme } from 'antd';
+import { ExportOutlined, LoginOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import AppSidebar from './components/AppSidebar.jsx';
 import ChatComposer from './components/ChatComposer.jsx';
 import EmptyChatCanvas from './components/EmptyChatCanvas.jsx';
@@ -13,18 +13,168 @@ import TopicDetailPage from './pages/TopicDetailPage.jsx';
 import TopicListPage from './pages/TopicListPage.jsx';
 import {
   createTopicSchedule,
+  authorizedFetch,
+  clearAuthSession,
+  getCurrentUser,
   getSchedulerJobRuns,
+  getTodayHotspots,
+  getTopicEmailNotification,
+  getTopicNotificationDeliveries,
+  getStoredAuthUser,
   getTopicSchedule,
+  loginWithEmail,
   pauseSchedulerJob,
   readApiResponse,
+  requestRegistrationCode,
   resumeSchedulerJob,
   runSchedulerJob,
+  saveTopicEmailNotification,
+  setAuthSession,
+  verifyRegistration,
 } from './utils/api.js';
-import { getOrCreateUserId, mergeAgentStep } from './utils/chat.js';
+import { mergeAgentStep } from './utils/chat.js';
 import './styles.css';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
+const APP_FONT_FAMILY = '"Microsoft YaHei", "微软雅黑", sans-serif';
+
+function AuthPage({ onAuthenticated, embedded = false }) {
+  const [mode, setMode] = useState('login');
+  const [emailForCode, setEmailForCode] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function submitLogin(values) {
+    setLoading(true);
+    setError('');
+    try {
+      const payload = await loginWithEmail(values);
+      setAuthSession(payload);
+      onAuthenticated(payload.user);
+    } catch (nextError) {
+      setError(nextError.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function requestCode(values) {
+    setLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      await requestRegistrationCode(values.email);
+      setEmailForCode(values.email);
+      setCodeSent(true);
+      setMessage('Verification code sent. Check your email, then complete registration.');
+    } catch (nextError) {
+      setError(nextError.message || 'Verification code request failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitRegistration(values) {
+    setLoading(true);
+    setError('');
+    try {
+      const payload = await verifyRegistration({
+        email: emailForCode,
+        code: values.code,
+        password: values.password,
+      });
+      setAuthSession(payload);
+      onAuthenticated(payload.user);
+    } catch (nextError) {
+      setError(nextError.message || 'Registration failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const content = (
+        <Space direction="vertical" size={18} className="authStack">
+          <Flex justify="space-between" align="center">
+            <div>
+              <Typography.Title level={3}>Topic Pulse</Typography.Title>
+              <Text type="secondary">{mode === 'login' ? 'Sign in with email' : 'Create your account'}</Text>
+            </div>
+            <Button type="text" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+              {mode === 'login' ? 'Register' : 'Login'}
+            </Button>
+          </Flex>
+
+          {error && <Alert type="error" message={error} showIcon />}
+          {message && <Alert type="success" message={message} showIcon />}
+
+          {mode === 'login' ? (
+            <Form layout="vertical" onFinish={submitLogin}>
+              <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
+                <Input autoComplete="email" />
+              </Form.Item>
+              <Form.Item name="password" label="Password" rules={[{ required: true }]}>
+                <Input.Password autoComplete="current-password" />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" loading={loading} block icon={<LoginOutlined />}>
+                Login
+              </Button>
+            </Form>
+          ) : (
+            <Space direction="vertical" size={14} className="authStack">
+              <Form layout="vertical" onFinish={requestCode} initialValues={{ email: emailForCode }}>
+                <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
+                  <Input autoComplete="email" disabled={codeSent} />
+                </Form.Item>
+                {codeSent ? (
+                  <Button
+                    onClick={() => {
+                      setCodeSent(false);
+                      setEmailForCode('');
+                      setMessage('');
+                    }}
+                    block
+                  >
+                    Change email
+                  </Button>
+                ) : (
+                  <Button htmlType="submit" loading={loading} block>
+                    Send verification code
+                  </Button>
+                )}
+              </Form>
+              {codeSent && (
+                <Form layout="vertical" onFinish={submitRegistration}>
+                  <Form.Item name="code" label="Verification code" rules={[{ required: true }]}>
+                    <Input inputMode="numeric" />
+                  </Form.Item>
+                  <Form.Item name="password" label="Password" rules={[{ required: true, min: 8 }]}>
+                    <Input.Password autoComplete="new-password" />
+                  </Form.Item>
+                  <Button type="primary" htmlType="submit" loading={loading} block>
+                    Create account
+                  </Button>
+                </Form>
+              )}
+            </Space>
+          )}
+        </Space>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <div className="authShell">
+      <Card className="authCard">
+        {content}
+      </Card>
+    </div>
+  );
+}
 
 function TopicPulseApp() {
   const [collapsed, setCollapsed] = useState(false);
@@ -48,7 +198,17 @@ function TopicPulseApp() {
   const [topicScheduleLoading, setTopicScheduleLoading] = useState(false);
   const [topicScheduleActionLoading, setTopicScheduleActionLoading] = useState('');
   const [topicScheduleError, setTopicScheduleError] = useState('');
-  const [userId] = useState(getOrCreateUserId);
+  const [topicNotification, setTopicNotification] = useState(null);
+  const [topicNotificationDeliveries, setTopicNotificationDeliveries] = useState([]);
+  const [topicNotificationLoading, setTopicNotificationLoading] = useState(false);
+  const [topicNotificationSaving, setTopicNotificationSaving] = useState(false);
+  const [topicNotificationError, setTopicNotificationError] = useState('');
+  const [todayHotspots, setTodayHotspots] = useState([]);
+  const [todayHotspotsLoading, setTodayHotspotsLoading] = useState(false);
+  const [todayHotspotsError, setTodayHotspotsError] = useState('');
+  const [authUser, setAuthUser] = useState(getStoredAuthUser);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const inputRef = useRef(null);
   const conversationPaneRef = useRef(null);
   const sessionLoadTokenRef = useRef(0);
@@ -68,6 +228,33 @@ function TopicPulseApp() {
     return latest?.content || '等待新的分析任务';
   }, [messages]);
 
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const user = await getCurrentUser();
+        setAuthUser(user);
+      } catch {
+        clearAuthSession();
+        setAuthUser(null);
+      } finally {
+        setAuthChecking(false);
+      }
+    }
+    checkAuth();
+  }, []);
+
+  function logout() {
+    clearAuthSession();
+    setAuthUser(null);
+    setMessages([]);
+    setSessionId(null);
+    setChatSessions([]);
+    navigate('/chat', { replace: true });
+    getCurrentUser()
+      .then(setAuthUser)
+      .catch(() => {});
+  }
+
   function createNewChat() {
     sessionLoadTokenRef.current += 1;
     creatingNewChatRef.current = true;
@@ -83,7 +270,7 @@ function TopicPulseApp() {
     setSessionsLoading(true);
     setSessionsError('');
     try {
-      const response = await fetch('/api/sessions');
+      const response = await authorizedFetch('/api/sessions');
       const data = await readApiResponse(response, '最近会话加载失败');
       setChatSessions(data.sessions || []);
     } catch (error) {
@@ -99,7 +286,7 @@ function TopicPulseApp() {
     sessionLoadTokenRef.current = loadToken;
     setSessionsError('');
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(nextSessionId)}`);
+      const response = await authorizedFetch(`/api/sessions/${encodeURIComponent(nextSessionId)}`);
       const data = await readApiResponse(response, '会话加载失败');
       if (loadToken !== sessionLoadTokenRef.current) {
         return;
@@ -140,7 +327,7 @@ function TopicPulseApp() {
     setTopicsLoading(true);
     setTopicsError('');
     try {
-      const response = await fetch('/api/topics');
+      const response = await authorizedFetch('/api/topics');
       const data = await readApiResponse(response, '话题列表加载失败');
       setTopics(data.topics || []);
     } catch (error) {
@@ -150,12 +337,26 @@ function TopicPulseApp() {
     }
   }
 
+  async function loadTodayHotspots() {
+    setTodayHotspotsLoading(true);
+    setTodayHotspotsError('');
+    try {
+      const data = await getTodayHotspots(10);
+      setTodayHotspots(data.items || []);
+    } catch (error) {
+      setTodayHotspots([]);
+      setTodayHotspotsError(error.message || '今日热点加载失败');
+    } finally {
+      setTodayHotspotsLoading(false);
+    }
+  }
+
   async function loadTopicDetail(topicId) {
     if (!topicId) return;
     setTopicDetailLoading(true);
     setTopicsError('');
     try {
-      const response = await fetch(`/api/topics/${encodeURIComponent(topicId)}`);
+      const response = await authorizedFetch(`/api/topics/${encodeURIComponent(topicId)}`);
       const data = await readApiResponse(response, '话题详情加载失败');
       setSelectedTopic(data);
     } catch (error) {
@@ -184,6 +385,26 @@ function TopicPulseApp() {
       setTopicScheduleError(error.message || '定时任务加载失败');
     } finally {
       setTopicScheduleLoading(false);
+    }
+  }
+
+  async function loadTopicNotification(topicId) {
+    if (!topicId) return;
+    setTopicNotificationLoading(true);
+    setTopicNotificationError('');
+    try {
+      const [subscription, deliveriesPayload] = await Promise.all([
+        getTopicEmailNotification(topicId),
+        getTopicNotificationDeliveries(topicId),
+      ]);
+      setTopicNotification(subscription || null);
+      setTopicNotificationDeliveries(deliveriesPayload.deliveries || []);
+    } catch (error) {
+      setTopicNotification(null);
+      setTopicNotificationDeliveries([]);
+      setTopicNotificationError(error.message || 'Email 通知状态加载失败');
+    } finally {
+      setTopicNotificationLoading(false);
     }
   }
 
@@ -241,6 +462,7 @@ function TopicPulseApp() {
       setTopicScheduleRuns(data.runs || []);
       if (routedTopicId) {
         await loadTopicDetail(routedTopicId);
+        await loadTopicNotification(routedTopicId);
       }
     } catch (error) {
       setTopicScheduleError(error.message || '定时任务运行失败');
@@ -249,11 +471,34 @@ function TopicPulseApp() {
     }
   }
 
+  async function toggleEmailNotification(enabled) {
+    if (!routedTopicId) return;
+    setTopicNotificationSaving(true);
+    setTopicNotificationError('');
+    try {
+      const subscription = await saveTopicEmailNotification(routedTopicId, {
+        enabled,
+        only_when_has_new: topicNotification?.only_when_has_new ?? true,
+        min_new_count: topicNotification?.min_new_count || 1,
+      });
+      setTopicNotification(subscription);
+      const deliveriesPayload = await getTopicNotificationDeliveries(routedTopicId);
+      setTopicNotificationDeliveries(deliveriesPayload.deliveries || []);
+    } catch (error) {
+      setTopicNotificationError(error.message || 'Email 通知设置保存失败');
+    } finally {
+      setTopicNotificationSaving(false);
+    }
+  }
+
   function selectTopic(topic) {
     navigate(`/topics/${encodeURIComponent(topic.id)}`);
   }
 
   useEffect(() => {
+    if (authChecking || !authUser) {
+      return;
+    }
     if (location.pathname === '/') {
       navigate('/chat', { replace: true });
       return;
@@ -261,11 +506,15 @@ function TopicPulseApp() {
     if (!location.pathname.startsWith('/chat') && !location.pathname.startsWith('/topics')) {
       navigate('/chat', { replace: true });
     }
-  }, [location.pathname, navigate]);
+  }, [authChecking, authUser, location.pathname, navigate]);
 
   useEffect(() => {
+    if (authChecking || !authUser) {
+      return;
+    }
     loadChatSessions();
-  }, []);
+    loadTodayHotspots();
+  }, [authChecking, authUser]);
 
   useEffect(() => {
     if (location.pathname === '/chat') {
@@ -284,10 +533,13 @@ function TopicPulseApp() {
   }, [activeView, routedSessionId, sessionId]);
 
   useEffect(() => {
+    if (authChecking || !authUser) {
+      return;
+    }
     if (activeView === 'topics') {
       loadTopics();
     }
-  }, [activeView]);
+  }, [authChecking, authUser, activeView]);
 
   useEffect(() => {
     if (activeView !== 'topics') {
@@ -295,16 +547,23 @@ function TopicPulseApp() {
       setTopicSchedule(null);
       setTopicScheduleRuns([]);
       setTopicScheduleError('');
+      setTopicNotification(null);
+      setTopicNotificationDeliveries([]);
+      setTopicNotificationError('');
       return;
     }
     if (routedTopicId) {
       loadTopicDetail(routedTopicId);
       loadTopicSchedule(routedTopicId);
+      loadTopicNotification(routedTopicId);
     } else {
       setSelectedTopic(null);
       setTopicSchedule(null);
       setTopicScheduleRuns([]);
       setTopicScheduleError('');
+      setTopicNotification(null);
+      setTopicNotificationDeliveries([]);
+      setTopicNotificationError('');
     }
   }, [activeView, routedTopicId]);
 
@@ -317,6 +576,11 @@ function TopicPulseApp() {
 
   async function copyMessage(content) {
     await window.navigator.clipboard?.writeText(content);
+  }
+
+  function fillComposer(nextInput) {
+    setInput(nextInput);
+    window.requestAnimationFrame(() => inputRef.current?.focus?.());
   }
 
   function scrollConversationToBottom(behavior = 'smooth', frames = 1) {
@@ -366,12 +630,11 @@ function TopicPulseApp() {
     };
 
     try {
-      const response = await fetch('/api/chat/stream', {
+      const response = await authorizedFetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
-          user_id: userId,
           session_id: sessionId,
         }),
       });
@@ -475,6 +738,24 @@ function TopicPulseApp() {
     }
   }
 
+  if (authChecking) {
+    return (
+      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { fontFamily: APP_FONT_FAMILY } }}>
+        <div className="authShell">
+          <Text type="secondary">Checking session...</Text>
+        </div>
+      </ConfigProvider>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { fontFamily: APP_FONT_FAMILY } }}>
+        <AuthPage onAuthenticated={setAuthUser} />
+      </ConfigProvider>
+    );
+  }
+
   return (
     <ConfigProvider
       theme={{
@@ -485,8 +766,7 @@ function TopicPulseApp() {
           colorSuccess: '#10b981',
           colorWarning: '#f59e0b',
           borderRadius: 8,
-          fontFamily:
-            'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
+          fontFamily: APP_FONT_FAMILY,
         },
         components: {
           Layout: {
@@ -515,7 +795,9 @@ function TopicPulseApp() {
           routedSessionId={routedSessionId}
           sessionsError={sessionsError}
           sessionsLoading={sessionsLoading}
-          userId={userId}
+          sessionLimit={authUser.is_guest ? 3 : null}
+          userId={authUser.email}
+          isGuest={authUser.is_guest}
         />
 
         <Layout className="workspace">
@@ -538,9 +820,15 @@ function TopicPulseApp() {
             </Flex>
             <Space>
               <Button icon={<ExportOutlined />}>导出</Button>
-              <Button type="primary" icon={<LoginOutlined />}>
-                登录
-              </Button>
+              {authUser.is_guest ? (
+                <Button type="primary" icon={<LoginOutlined />} onClick={() => setAuthModalOpen(true)}>
+                  登录
+                </Button>
+              ) : (
+                <Button icon={<LogoutOutlined />} onClick={logout}>
+                  Logout
+                </Button>
+              )}
             </Space>
           </Header>
 
@@ -556,12 +844,19 @@ function TopicPulseApp() {
                     scheduleLoading={topicScheduleLoading}
                     scheduleActionLoading={topicScheduleActionLoading}
                     scheduleError={topicScheduleError}
+                    notification={topicNotification}
+                    notificationDeliveries={topicNotificationDeliveries}
+                    notificationLoading={topicNotificationLoading}
+                    notificationSaving={topicNotificationSaving}
+                    notificationError={topicNotificationError}
                     onBack={() => navigate('/topics')}
                     onCreateSchedule={createScheduleForCurrentTopic}
                     onPauseSchedule={pauseSchedule}
                     onResumeSchedule={resumeSchedule}
                     onRunSchedule={runScheduleNow}
                     onReloadSchedule={() => loadTopicSchedule(routedTopicId)}
+                    onToggleEmailNotification={toggleEmailNotification}
+                    isGuest={authUser.is_guest}
                   />
                 ) : (
                   <TopicListPage
@@ -573,7 +868,13 @@ function TopicPulseApp() {
                   />
                 )
               ) : messages.length === 0 ? (
-                <EmptyChatCanvas onPrompt={sendMessage} />
+                <EmptyChatCanvas
+                  hotspotError={todayHotspotsError}
+                  hotspots={todayHotspots}
+                  hotspotsLoading={todayHotspotsLoading}
+                  onHotspotSelect={fillComposer}
+                  onPrompt={sendMessage}
+                />
               ) : (
                 <div className="messageList">
                   {messages.map((message, index) => (
@@ -611,6 +912,24 @@ function TopicPulseApp() {
           )}
         </Layout>
       </Layout>
+
+      <Modal
+        title="登录或注册"
+        open={authModalOpen}
+        footer={null}
+        onCancel={() => setAuthModalOpen(false)}
+        destroyOnClose
+      >
+        <AuthPage
+          embedded
+          onAuthenticated={(user) => {
+            setAuthUser(user);
+            setAuthModalOpen(false);
+            loadChatSessions();
+            loadTodayHotspots();
+          }}
+        />
+      </Modal>
     </ConfigProvider>
   );
 }

@@ -6,10 +6,13 @@ from .base import (
     ContextTrimmer,
     PassthroughContextTrimmer,
 )
+from .react import ReActContextBudget, ReActContextManager
 
 __all__ = [
     "ContextTrimRequest",
     "ContextTrimResult",
     "ContextTrimmer",
     "PassthroughContextTrimmer",
+    "ReActContextBudget",
+    "ReActContextManager",
 ]

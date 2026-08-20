@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "apscheduler>=3.10",
+    "beautifulsoup4>=4.12",
     "fastapi>=0.115",
+    "requests>=2.31",
     "uvicorn[standard]>=0.30",
 ]
 

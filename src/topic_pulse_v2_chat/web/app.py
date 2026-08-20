@@ -4,30 +4,51 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
-from uuid import uuid5, NAMESPACE_URL
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from topic_pulse_v2.auth import AuthService, AuthUser
+from topic_pulse_v2.config import load_env_file, session_data_dir, topics_dir
+from topic_pulse_v2.notifications import NotificationDispatcher, SQLiteNotificationStore
 from topic_pulse_v2.scheduler import SchedulerService, ScheduledJob, ScheduledTaskRegistry, SQLiteSchedulerStore
 from topic_pulse_v2.scheduler.tasks import register_builtin_tasks
-from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage
+from topic_pulse_v2.tool_register.tools.topic_schedule_create import set_active_topic_schedule_scheduler
+from topic_pulse_v2.topics import (
+    create_topic_refresh_schedule as create_topic_refresh_schedule_job,
+    find_topic_refresh_job,
+)
+from topic_pulse_v2.session import MarkdownSessionHistoryStore, SessionMessage, SQLiteSessionStore
+from topic_pulse_v2.topics import SQLiteHotspotStore, SQLiteTopicStore, TopicRecord
 from topic_pulse_v2_chat.web.schemas import (
+    AuthLoginRequest,
+    AuthMessageResponse,
+    AuthRegisterVerifyRequest,
+    AuthRequestCodeRequest,
+    AuthTokenResponse,
+    AuthUserResponse,
     ChatRequest,
     ChatResponse,
     CreateTopicRefreshJobRequest,
+    EmailNotificationSubscriptionRequest,
     HealthResponse,
+    HotspotRankingItemResponse,
+    HotspotTodayResponse,
     JobRunListResponse,
     JobRunResponse,
+    NotificationDeliveryListResponse,
+    NotificationDeliveryResponse,
+    NotificationSubscriptionResponse,
     SchedulerJobListResponse,
     SchedulerJobResponse,
     SessionChatMessage,
@@ -41,9 +62,10 @@ from topic_pulse_v2_chat.web.schemas import (
 from topic_pulse_v2_chat.web.react_service import ReactChatService, react_result_steps_to_dict
 
 FRONTEND_DIST_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
-TOPICS_DIR = Path(__file__).resolve().parents[3] / "data" / "topics"
-SESSION_DATA_DIR = Path(__file__).resolve().parents[2] / "topic_pulse_v2" / "session" / "data"
+TOPICS_DIR = topics_dir()
+SESSION_DATA_DIR = session_data_dir()
 logger = logging.getLogger(__name__)
+load_env_file()
 
 
 class ChatRuntime(Protocol):
@@ -84,7 +106,29 @@ class SchedulerRuntime(Protocol):
         ...
 
 
+class AuthRuntime(Protocol):
+    def initialize(self) -> None:
+        ...
+
+    def request_registration_code(self, email: str) -> None:
+        ...
+
+    def register_with_code(self, *, email: str, code: str, password: str):
+        ...
+
+    def login(self, *, email: str, password: str):
+        ...
+
+    def authenticate_token(self, token: str) -> AuthUser:
+        ...
+
+
 _STREAM_END = object()
+GUEST_USER_PREFIX = "guest_"
+GUEST_SESSION_LIMIT = 3
+GUEST_LIMIT_ERROR = "访客最多创建 3 个对话，请登录后继续。"
+GUEST_SCHEDULE_ERROR = "访客不能创建定时调度任务，请登录后使用。"
+GUEST_NOTIFICATION_ERROR = "访客不能创建通知订阅，请登录后使用。"
 
 
 def _next_stream_event(iterator):
@@ -113,16 +157,37 @@ def _topic_preview(content: str) -> str:
     return " ".join(paragraphs)[:180]
 
 
-def _topic_summary(path: Path) -> TopicSummary:
+def _topic_summary(path: Path, *, topic_id: str | None = None, title: str | None = None, updated_at: datetime | None = None) -> TopicSummary:
     content = path.read_text(encoding="utf-8")
     stat = path.stat()
     return TopicSummary(
-        id=path.stem,
-        title=_topic_title(content, path.stem),
+        id=topic_id or path.stem,
+        title=title or _topic_title(content, path.stem),
         filename=path.name,
-        updated_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        updated_at=(updated_at or datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)).isoformat(),
         size=stat.st_size,
         preview=_topic_preview(content),
+    )
+
+
+def _topic_store() -> SQLiteTopicStore:
+    return SQLiteTopicStore(topics_dir=TOPICS_DIR)
+
+
+def _hotspot_store() -> SQLiteHotspotStore:
+    return SQLiteHotspotStore()
+
+
+def _notification_store() -> SQLiteNotificationStore:
+    return SQLiteNotificationStore()
+
+
+def _topic_summary_from_record(record: TopicRecord) -> TopicSummary:
+    return _topic_summary(
+        Path(record.markdown_path),
+        topic_id=record.id,
+        title=record.title,
+        updated_at=record.updated_at,
     )
 
 
@@ -174,26 +239,87 @@ def _job_run_response(run) -> JobRunResponse:
     )
 
 
-def _topic_refresh_job_id(topic_id: str) -> str:
-    return f"topic-refresh-{uuid5(NAMESPACE_URL, f'topic-pulse/topic/{topic_id}')}"
+def _notification_subscription_response(subscription, *, user: AuthUser, topic_id: str) -> NotificationSubscriptionResponse:
+    if subscription is None:
+        return NotificationSubscriptionResponse(
+            user_id=user.id,
+            topic_id=topic_id,
+            target=user.email,
+            enabled=False,
+        )
+    return NotificationSubscriptionResponse(
+        id=subscription.id,
+        user_id=subscription.user_id,
+        topic_id=subscription.topic_id,
+        channel=subscription.channel,
+        target=subscription.target,
+        enabled=subscription.enabled,
+        only_when_has_new=subscription.only_when_has_new,
+        min_new_count=subscription.min_new_count,
+        digest_mode=subscription.digest_mode,
+        created_at=subscription.created_at.isoformat(),
+        updated_at=subscription.updated_at.isoformat(),
+    )
 
 
-def _find_topic_refresh_job(scheduler: SchedulerRuntime, topic_id: str) -> ScheduledJob | None:
+def _notification_delivery_response(delivery) -> NotificationDeliveryResponse:
+    return NotificationDeliveryResponse(
+        id=delivery.id,
+        subscription_id=delivery.subscription_id,
+        job_run_id=delivery.job_run_id,
+        user_id=delivery.user_id,
+        topic_id=delivery.topic_id,
+        channel=delivery.channel,
+        status=delivery.status,
+        subject=delivery.subject,
+        error=delivery.error,
+        provider_response=delivery.provider_response,
+        created_at=delivery.created_at.isoformat(),
+        sent_at=delivery.sent_at.isoformat() if delivery.sent_at else None,
+    )
+
+
+def _default_hotspot_refresh_job_id() -> str:
+    return "hotspot-refresh-weibo-hourly"
+
+
+def _ensure_default_hotspot_refresh_job(scheduler: SchedulerRuntime) -> None:
     for job in scheduler.list_jobs():
         metadata = job.metadata or {}
-        if metadata.get("type") == "topic_refresh" and metadata.get("topic_id") == topic_id:
+        if metadata.get("type") == "hotspot_refresh" and metadata.get("provider") == "weibo":
+            return
+
+    now = datetime.now(timezone.utc)
+    scheduler.add_job(
+        ScheduledJob(
+            id=_default_hotspot_refresh_job_id(),
+            task_name="refresh_hotspots",
+            trigger="interval",
+            trigger_args={"hours": 1},
+            kwargs={"provider": "weibo"},
+            status="active",
+            name="Refresh Weibo hotspots hourly",
+            description="Refresh today's platform-level hot news ranking from Weibo.",
+            metadata={
+                "type": "hotspot_refresh",
+                "provider": "weibo",
+            },
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _job_belongs_to_user(job: ScheduledJob, user_id: str) -> bool:
+    metadata = job.metadata or {}
+    return metadata.get("user_id") == user_id
+
+
+def _get_user_scheduler_job(scheduler: SchedulerRuntime, job_id: str, user_id: str) -> ScheduledJob:
+    for job in scheduler.list_jobs():
+        if job.id == job_id and _job_belongs_to_user(job, user_id):
             return job
-    return None
-
-
-def _topic_refresh_trigger_args(request: CreateTopicRefreshJobRequest) -> tuple[str, dict]:
-    if request.trigger == "interval":
-        return "interval", {"minutes": request.interval_minutes}
-    if request.trigger == "cron":
-        if request.cron_hour is None or request.cron_minute is None:
-            raise HTTPException(status_code=422, detail="cron_hour and cron_minute are required for cron trigger")
-        return "cron", {"hour": request.cron_hour, "minute": request.cron_minute}
-    raise HTTPException(status_code=422, detail="trigger must be one of: interval, cron")
+    raise LookupError(f"Scheduled job not found: {job_id}")
 
 
 def _stream_event(event_type: str, **payload) -> str:
@@ -244,7 +370,11 @@ def _partial_display_answer(content: str) -> str:
     final_answer = _partial_json_string_value(answer, "final_answer")
     if final_answer:
         nested = _partial_display_answer(final_answer)
-        return nested or final_answer
+        if nested:
+            return nested
+        if final_answer.lstrip().startswith("{"):
+            return ""
+        return final_answer
 
     summary = _partial_json_string_value(answer, "summary")
     if summary:
@@ -518,12 +648,75 @@ def _extract_json_text_field(content: str, key: str, following_keys: tuple[str, 
         )
 
 
-def _session_store() -> MarkdownSessionHistoryStore:
-    return MarkdownSessionHistoryStore(SESSION_DATA_DIR)
+def _session_index_store() -> SQLiteSessionStore:
+    return SQLiteSessionStore(sessions_dir=SESSION_DATA_DIR)
 
 
+def _session_store(session_store: SQLiteSessionStore | None = None) -> MarkdownSessionHistoryStore:
+    return MarkdownSessionHistoryStore(SESSION_DATA_DIR, session_store=session_store)
 
-def _create_scheduler_service(chat_runtime: ChatRuntime | None = None) -> SchedulerService:
+
+def _auth_user_response(user: AuthUser) -> AuthUserResponse:
+    return AuthUserResponse(id=user.id, email=user.email, is_guest=user.is_guest)
+
+
+def _auth_token_response(user: AuthUser, token: str) -> AuthTokenResponse:
+    return AuthTokenResponse(
+        access_token=token,
+        user=_auth_user_response(user),
+    )
+
+
+def _guest_user_from_id(guest_id: str) -> AuthUser:
+    value = str(guest_id or "").strip()
+    if not re.fullmatch(r"guest_[A-Za-z0-9_.-]{8,96}", value):
+        raise ValueError("Invalid guest id.")
+    return AuthUser(
+        id=value,
+        email=f"{value[:18]}@guest.local",
+        status="active",
+        is_guest=True,
+    )
+
+
+def _visible_session_count(user_id: str) -> int:
+    index_store = _session_index_store()
+    store = _session_store(index_store)
+    count = 0
+    for record in index_store.list_sessions(user_id=user_id):
+        path = Path(record.markdown_path)
+        if not path.exists() or not path.is_file():
+            continue
+        messages = store.list(record.id, user_id=user_id)
+        if _is_hidden_session(messages):
+            continue
+        count += 1
+    return count
+
+
+def _ensure_guest_can_create_session(user: AuthUser, session_id: str | None) -> None:
+    if not user.is_guest:
+        return
+    if session_id and _session_index_store().get_session(user_id=user.id, session_id=session_id) is not None:
+        return
+    if _visible_session_count(user.id) >= GUEST_SESSION_LIMIT:
+        raise HTTPException(status_code=403, detail=GUEST_LIMIT_ERROR)
+
+
+def _ensure_registered_user(user: AuthUser) -> None:
+    if user.is_guest:
+        raise HTTPException(status_code=403, detail=GUEST_SCHEDULE_ERROR)
+
+
+def _ensure_registered_notification_user(user: AuthUser) -> None:
+    if user.is_guest:
+        raise HTTPException(status_code=403, detail=GUEST_NOTIFICATION_ERROR)
+
+
+def _create_scheduler_service(
+    chat_runtime: ChatRuntime | None = None,
+    notification_dispatcher: NotificationDispatcher | None = None,
+) -> SchedulerService:
     registry = ScheduledTaskRegistry()
     register_builtin_tasks(registry, chat_runtime=chat_runtime)
     return SchedulerService(
@@ -531,11 +724,14 @@ def _create_scheduler_service(chat_runtime: ChatRuntime | None = None) -> Schedu
         registry=registry,
         timezone="Asia/Shanghai",
         enabled=True,
+        notification_dispatcher=notification_dispatcher,
     )
 
 
 def _session_title(messages: list[SessionMessage], fallback: str) -> str:
     for message in messages:
+        if _is_internal_session_message(message):
+            continue
         if message.role != "user":
             continue
         title = " ".join(message.content.strip().split())
@@ -546,21 +742,37 @@ def _session_title(messages: list[SessionMessage], fallback: str) -> str:
 
 def _session_preview(messages: list[SessionMessage]) -> str:
     for message in reversed(messages):
+        if _is_internal_session_message(message):
+            continue
         if message.role == "user":
             continue
         preview = " ".join(_display_answer(message.content).strip().split())
         if preview:
             return preview[:96]
     for message in reversed(messages):
+        if _is_internal_session_message(message):
+            continue
         preview = " ".join(message.content.strip().split())
         if preview:
             return preview[:96]
     return ""
 
 
+def _visible_session_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
+    return [
+        message
+        for message in messages
+        if not _is_internal_session_message(message)
+    ]
+
+
+def _is_internal_session_message(message: SessionMessage) -> bool:
+    return (message.metadata or {}).get("visibility") == "internal"
+
+
 def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage]:
     formatted = []
-    for message in messages:
+    for message in _visible_session_messages(messages):
         topic_update = _answer_topic_update(message.content) if message.role == "assistant" else {}
         content = (
             _display_answer_for_topic_update(message.content, topic_update)
@@ -581,14 +793,22 @@ def _session_messages(messages: list[SessionMessage]) -> list[SessionChatMessage
     return formatted
 
 
-def _session_summary(path: Path, store: MarkdownSessionHistoryStore) -> SessionSummary:
-    messages = store.list(path.stem)
+def _is_hidden_session(messages: list[SessionMessage]) -> bool:
+    for message in messages:
+        metadata = message.metadata or {}
+        if metadata.get("visibility") == "hidden" or metadata.get("source") == "scheduler":
+            return True
+    return False
+
+
+def _session_summary(path: Path, store: MarkdownSessionHistoryStore, messages: list[SessionMessage] | None = None) -> SessionSummary:
+    messages = messages if messages is not None else store.list(path.stem)
     stat = path.stat()
     return SessionSummary(
         id=path.stem,
         title=_session_title(messages, path.stem),
         updated_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-        message_count=len(messages),
+        message_count=len(_visible_session_messages(messages)),
         preview=_session_preview(messages),
     )
 
@@ -596,15 +816,25 @@ def _session_summary(path: Path, store: MarkdownSessionHistoryStore) -> SessionS
 def create_app(
     chat_runtime: ChatRuntime | None = None,
     scheduler_service: SchedulerRuntime | None = None,
+    auth_service: AuthRuntime | None = None,
+    auth_required: bool = True,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.scheduler_service = scheduler_service or _create_scheduler_service(app.state.chat_runtime)
+        app.state.notification_dispatcher.initialize()
+        app.state.scheduler_service = scheduler_service or _create_scheduler_service(
+            app.state.chat_runtime,
+            notification_dispatcher=app.state.notification_dispatcher,
+        )
         app.state.scheduler_service.start()
+        set_active_topic_schedule_scheduler(app.state.scheduler_service)
+        _ensure_default_hotspot_refresh_job(app.state.scheduler_service)
         try:
             yield
         finally:
+            set_active_topic_schedule_scheduler(None)
             app.state.scheduler_service.shutdown(wait=False)
+            app.state.notification_store.close()
 
     app = FastAPI(
         title="Topic Pulse Chat",
@@ -613,6 +843,14 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.chat_runtime = chat_runtime or ReactChatService()
+    app.state.auth_service = auth_service or (AuthService() if auth_required else None)
+    app.state.notification_store = _notification_store()
+    app.state.notification_dispatcher = NotificationDispatcher(
+        store=app.state.notification_store,
+        app_base_url=os.getenv("TOPIC_PULSE_PUBLIC_BASE_URL", ""),
+    )
+    if app.state.auth_service is not None:
+        app.state.auth_service.initialize()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -621,16 +859,74 @@ def create_app(
         allow_headers=["*"],
     )
 
+    def current_user(
+        authorization: str | None = Header(default=None),
+        x_guest_id: str | None = Header(default=None, alias="X-Guest-Id"),
+    ) -> AuthUser:
+        if not auth_required:
+            return AuthUser(id="anonymous-user-1", email="anonymous@example.test", status="active")
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() == "bearer" and token:
+            try:
+                return app.state.auth_service.authenticate_token(token)
+            except Exception as exc:
+                raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+        if x_guest_id:
+            try:
+                return _guest_user_from_id(x_guest_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=401, detail="Invalid guest id") from exc
+        raise HTTPException(status_code=401, detail="Authentication required")
+
     @app.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse()
 
+    @app.post("/api/auth/register/request-code", response_model=AuthMessageResponse)
+    def request_registration_code(request: AuthRequestCodeRequest) -> AuthMessageResponse:
+        if app.state.auth_service is None:
+            raise HTTPException(status_code=404, detail="Auth is disabled")
+        try:
+            app.state.auth_service.request_registration_code(request.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return AuthMessageResponse()
+
+    @app.post("/api/auth/register/verify", response_model=AuthTokenResponse)
+    def verify_registration(request: AuthRegisterVerifyRequest) -> AuthTokenResponse:
+        if app.state.auth_service is None:
+            raise HTTPException(status_code=404, detail="Auth is disabled")
+        try:
+            user, token = app.state.auth_service.register_with_code(
+                email=request.email,
+                code=request.code,
+                password=request.password,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _auth_token_response(user, token)
+
+    @app.post("/api/auth/login", response_model=AuthTokenResponse)
+    def login(request: AuthLoginRequest) -> AuthTokenResponse:
+        if app.state.auth_service is None:
+            raise HTTPException(status_code=404, detail="Auth is disabled")
+        try:
+            user, token = app.state.auth_service.login(email=request.email, password=request.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail="Invalid email or password") from exc
+        return _auth_token_response(user, token)
+
+    @app.get("/api/auth/me", response_model=AuthUserResponse)
+    def me(user: AuthUser = Depends(current_user)) -> AuthUserResponse:
+        return _auth_user_response(user)
+
     @app.post("/api/chat", response_model=ChatResponse)
-    async def chat(request: ChatRequest) -> ChatResponse:
+    async def chat(request: ChatRequest, user: AuthUser = Depends(current_user)) -> ChatResponse:
+        _ensure_guest_can_create_session(user, request.session_id)
         try:
             result = await run_in_threadpool(
                 app.state.chat_runtime.chat,
-                user_id=request.user_id,
+                user_id=user.id,
                 message=request.message,
                 session_id=request.session_id,
                 metadata={
@@ -648,7 +944,7 @@ def create_app(
         return ChatResponse(
             answer=_display_answer_for_topic_update(result.answer, topic_update),
             session_id=result.session_id or "",
-            user_id=request.user_id,
+            user_id=user.id,
             completed=result.completed,
             query_key=_answer_query_key(result.answer),
             reference_data=_answer_reference_data(result.answer),
@@ -657,7 +953,9 @@ def create_app(
         )
 
     @app.post("/api/chat/stream")
-    async def stream_chat(request: ChatRequest) -> StreamingResponse:
+    async def stream_chat(request: ChatRequest, user: AuthUser = Depends(current_user)) -> StreamingResponse:
+        _ensure_guest_can_create_session(user, request.session_id)
+
         async def event_generator():
             yield _stream_event("status", text="正在分析问题")
             result = None
@@ -670,7 +968,7 @@ def create_app(
                 }
                 if hasattr(app.state.chat_runtime, "chat_stream"):
                     iterator = app.state.chat_runtime.chat_stream(
-                        user_id=request.user_id,
+                        user_id=user.id,
                         message=request.message,
                         session_id=request.session_id,
                         metadata=metadata,
@@ -744,7 +1042,7 @@ def create_app(
                 else:
                     result = await run_in_threadpool(
                         app.state.chat_runtime.chat,
-                        user_id=request.user_id,
+                        user_id=user.id,
                         message=request.message,
                         session_id=request.session_id,
                         metadata=metadata,
@@ -788,7 +1086,7 @@ def create_app(
             yield _stream_event(
                 "done",
                 session_id=result.session_id or "",
-                user_id=request.user_id,
+                user_id=user.id,
                 completed=result.completed,
                 query_key=query_key,
                 reference_data=reference_data,
@@ -806,130 +1104,243 @@ def create_app(
         )
 
     @app.get("/api/topics", response_model=TopicListResponse)
-    def list_topics() -> TopicListResponse:
-        if not TOPICS_DIR.exists():
-            return TopicListResponse()
-        topics = [_topic_summary(path) for path in sorted(TOPICS_DIR.glob("*.md"), key=lambda item: item.stat().st_mtime, reverse=True)]
+    def list_topics(user: AuthUser = Depends(current_user)) -> TopicListResponse:
+        store = _topic_store()
+        topics = [
+            _topic_summary_from_record(record)
+            for record in store.list_topics(user_id=user.id)
+            if Path(record.markdown_path).exists()
+        ]
         return TopicListResponse(topics=topics)
 
     @app.get("/api/topics/{topic_id}", response_model=TopicDetailResponse)
-    def get_topic(topic_id: str) -> TopicDetailResponse:
-        path = _topic_path(topic_id)
+    def get_topic(topic_id: str, user: AuthUser = Depends(current_user)) -> TopicDetailResponse:
+        try:
+            record = _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        summary = _topic_summary(path)
+        summary = _topic_summary_from_record(record)
         return TopicDetailResponse(**_model_data(summary), content=path.read_text(encoding="utf-8"))
 
+    @app.get("/api/topics/{topic_id}/notifications/email", response_model=NotificationSubscriptionResponse)
+    def get_topic_email_notification(
+        topic_id: str,
+        user: AuthUser = Depends(current_user),
+    ) -> NotificationSubscriptionResponse:
+        try:
+            _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        subscription = app.state.notification_store.get_subscription(
+            user_id=user.id,
+            topic_id=topic_id,
+            channel="email",
+        )
+        return _notification_subscription_response(subscription, user=user, topic_id=topic_id)
+
+    @app.put("/api/topics/{topic_id}/notifications/email", response_model=NotificationSubscriptionResponse)
+    def save_topic_email_notification(
+        topic_id: str,
+        request: EmailNotificationSubscriptionRequest,
+        user: AuthUser = Depends(current_user),
+    ) -> NotificationSubscriptionResponse:
+        _ensure_registered_notification_user(user)
+        try:
+            _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        subscription = app.state.notification_store.upsert_email_subscription(
+            user_id=user.id,
+            topic_id=topic_id,
+            target=user.email,
+            enabled=request.enabled,
+            only_when_has_new=request.only_when_has_new,
+            min_new_count=request.min_new_count,
+        )
+        return _notification_subscription_response(subscription, user=user, topic_id=topic_id)
+
+    @app.get("/api/topics/{topic_id}/notifications/deliveries", response_model=NotificationDeliveryListResponse)
+    def list_topic_notification_deliveries(
+        topic_id: str,
+        user: AuthUser = Depends(current_user),
+    ) -> NotificationDeliveryListResponse:
+        try:
+            _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        deliveries = app.state.notification_store.list_deliveries(
+            user_id=user.id,
+            topic_id=topic_id,
+        )
+        return NotificationDeliveryListResponse(
+            deliveries=[_notification_delivery_response(delivery) for delivery in deliveries]
+        )
+
+    @app.get("/api/hotspots/today", response_model=HotspotTodayResponse)
+    def get_today_hotspots(
+        limit: int = 10,
+        user: AuthUser = Depends(current_user),
+    ) -> HotspotTodayResponse:
+        today = datetime.now().astimezone().date()
+        safe_limit = max(1, min(int(limit or 10), 50))
+        rows = _hotspot_store().list_daily_ranking(today, limit=safe_limit)
+        updated_at = ""
+        if rows:
+            updated_at = max(str(row.get("updated_at") or "") for row in rows)
+        return HotspotTodayResponse(
+            date=today.isoformat(),
+            updated_at=updated_at,
+            items=[
+                HotspotRankingItemResponse(
+                    topic_id=str(row.get("topic_id") or ""),
+                    rank=int(row.get("rank") or 0),
+                    score=float(row.get("score") or 0.0),
+                    title=str(row.get("canonical_title") or ""),
+                    summary=str(row.get("summary") or ""),
+                    why_hot=str(row.get("why_hot") or ""),
+                    category=str(row.get("category") or ""),
+                    trend=str(row.get("trend") or ""),
+                    first_seen_at=str(row.get("first_seen_at") or ""),
+                    last_seen_at=str(row.get("last_seen_at") or ""),
+                    source_count=int(row.get("source_count") or 0),
+                    observation_count=int(row.get("observation_count") or 0),
+                )
+                for row in rows
+            ],
+        )
+
     @app.get("/api/scheduler/jobs", response_model=SchedulerJobListResponse)
-    def list_scheduler_jobs() -> SchedulerJobListResponse:
+    def list_scheduler_jobs(user: AuthUser = Depends(current_user)) -> SchedulerJobListResponse:
         return SchedulerJobListResponse(
-            jobs=[_scheduler_job_response(job) for job in app.state.scheduler_service.list_jobs()]
+            jobs=[
+                _scheduler_job_response(job)
+                for job in app.state.scheduler_service.list_jobs()
+                if _job_belongs_to_user(job, user.id)
+            ]
         )
 
     @app.post("/api/topics/{topic_id}/schedule", response_model=SchedulerJobResponse)
     def create_topic_refresh_schedule(
         topic_id: str,
         request: CreateTopicRefreshJobRequest,
+        user: AuthUser = Depends(current_user),
     ) -> SchedulerJobResponse:
-        path = _topic_path(topic_id)
+        _ensure_registered_user(user)
+        try:
+            record = _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        existing = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
-        if existing is not None:
-            return _scheduler_job_response(existing)
-
-        topic = _topic_summary(path)
-        trigger, trigger_args = _topic_refresh_trigger_args(request)
-        now = datetime.now(timezone.utc)
-        job = ScheduledJob(
-            id=_topic_refresh_job_id(topic_id),
-            task_name="refresh_topic",
-            trigger=trigger,
-            trigger_args=trigger_args,
-            kwargs={
-                "topic_name": topic.title,
-            },
-            status="active" if request.enabled else "paused",
-            name=f"Refresh topic: {topic.title}",
-            description="Refresh one tracked topic from the web and update local Markdown memory.",
-            metadata={
-                "type": "topic_refresh",
-                "topic_id": topic.id,
-                "topic_title": topic.title,
-                "topic_filename": topic.filename,
-            },
-            created_at=now,
-            updated_at=now,
-        )
-        return _scheduler_job_response(app.state.scheduler_service.add_job(job))
+        try:
+            job, _ = create_topic_refresh_schedule_job(
+                scheduler=app.state.scheduler_service,
+                topic_store=_topic_store(),
+                user_id=user.id,
+                topic_id=topic_id,
+                trigger=request.trigger,
+                interval_minutes=request.interval_minutes,
+                cron_hour=request.cron_hour,
+                cron_minute=request.cron_minute,
+                enabled=request.enabled,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        return _scheduler_job_response(job)
 
     @app.get("/api/topics/{topic_id}/schedule", response_model=SchedulerJobResponse | None)
-    def get_topic_refresh_schedule(topic_id: str):
-        path = _topic_path(topic_id)
+    def get_topic_refresh_schedule(topic_id: str, user: AuthUser = Depends(current_user)):
+        try:
+            record = _topic_store().get_topic(user_id=user.id, topic_id=topic_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Topic not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Topic not found")
-        job = _find_topic_refresh_job(app.state.scheduler_service, topic_id)
+        job = find_topic_refresh_job(app.state.scheduler_service, topic_id, user_id=user.id)
         return _scheduler_job_response(job) if job is not None else None
 
     @app.post("/api/scheduler/jobs/{job_id}/pause", response_model=SchedulerJobResponse)
-    def pause_scheduler_job(job_id: str) -> SchedulerJobResponse:
+    def pause_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> SchedulerJobResponse:
+        _ensure_registered_user(user)
         try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             job = app.state.scheduler_service.pause_job(job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
         return _scheduler_job_response(job)
 
     @app.post("/api/scheduler/jobs/{job_id}/resume", response_model=SchedulerJobResponse)
-    def resume_scheduler_job(job_id: str) -> SchedulerJobResponse:
+    def resume_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> SchedulerJobResponse:
+        _ensure_registered_user(user)
         try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             job = app.state.scheduler_service.resume_job(job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
         return _scheduler_job_response(job)
 
     @app.post("/api/scheduler/jobs/{job_id}/run", response_model=JobRunResponse)
-    async def run_scheduler_job(job_id: str) -> JobRunResponse:
+    async def run_scheduler_job(job_id: str, user: AuthUser = Depends(current_user)) -> JobRunResponse:
+        _ensure_registered_user(user)
         try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
             run = await app.state.scheduler_service.run_job_now(job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found") from exc
         return _job_run_response(run)
 
     @app.get("/api/scheduler/jobs/{job_id}/runs", response_model=JobRunListResponse)
-    def list_scheduler_job_runs(job_id: str) -> JobRunListResponse:
-        jobs = {job.id for job in app.state.scheduler_service.list_jobs()}
-        if job_id not in jobs:
+    def list_scheduler_job_runs(job_id: str, user: AuthUser = Depends(current_user)) -> JobRunListResponse:
+        try:
+            _get_user_scheduler_job(app.state.scheduler_service, job_id, user.id)
+        except LookupError as exc:
             raise HTTPException(status_code=404, detail="Scheduled job not found")
         return JobRunListResponse(
             runs=[_job_run_response(run) for run in app.state.scheduler_service.list_runs(job_id)]
         )
 
     @app.get("/api/sessions", response_model=SessionListResponse)
-    def list_sessions() -> SessionListResponse:
-        store = _session_store()
-        if not SESSION_DATA_DIR.exists():
-            return SessionListResponse()
-        paths = [
-            path
-            for path in SESSION_DATA_DIR.glob("*.md")
-            if path.is_file() and not path.name.startswith(".")
-        ]
-        sessions = [
-            _session_summary(path, store)
-            for path in sorted(paths, key=lambda item: item.stat().st_mtime, reverse=True)
-        ]
+    def list_sessions(user: AuthUser = Depends(current_user)) -> SessionListResponse:
+        index_store = _session_index_store()
+        store = _session_store(index_store)
+        sessions = []
+        for record in index_store.list_sessions(user_id=user.id):
+            path = Path(record.markdown_path)
+            if not path.exists() or not path.is_file():
+                continue
+            messages = store.list(record.id, user_id=user.id)
+            if _is_hidden_session(messages):
+                continue
+            sessions.append(_session_summary(path, store, messages))
         return SessionListResponse(sessions=sessions)
 
     @app.get("/api/sessions/{session_id}", response_model=SessionDetailResponse)
-    def get_session(session_id: str) -> SessionDetailResponse:
-        store = _session_store()
-        path = store.path_for(session_id)
+    def get_session(session_id: str, user: AuthUser = Depends(current_user)) -> SessionDetailResponse:
+        index_store = _session_index_store()
+        store = _session_store(index_store)
+        try:
+            record = index_store.require_session(user_id=user.id, session_id=session_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        path = Path(record.markdown_path)
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="Session not found")
-        summary = _session_summary(path, store)
+        messages = store.list(session_id, user_id=user.id)
+        if _is_hidden_session(messages):
+            raise HTTPException(status_code=404, detail="Session not found")
+        summary = _session_summary(path, store, messages)
         return SessionDetailResponse(
             **_model_data(summary),
-            messages=_session_messages(store.list(session_id)),
+            messages=_session_messages(messages),
         )
 
     if FRONTEND_DIST_DIR.exists():

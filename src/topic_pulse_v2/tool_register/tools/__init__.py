@@ -11,6 +11,11 @@ from .doubao_search import (
     doubao_search,
     register_doubao_search_tool,
 )
+from .hot_topic_search import (
+    HOT_TOPIC_SEARCH_TOOL_NAME,
+    hot_topic_search,
+    register_hot_topic_search_tool,
+)
 from .topic_markdown_store import (
     TOPIC_MARKDOWN_STORE_TOOL_NAME,
     register_topic_markdown_store_tool,
@@ -22,6 +27,11 @@ from .topic_markdown_read import (
     register_topic_markdown_read_tools,
     topic_markdown_read_detail,
     topic_markdown_read_summary,
+)
+from .topic_schedule_create import (
+    TOPIC_SCHEDULE_CREATE_TOOL_NAME,
+    register_topic_schedule_create_tool,
+    topic_schedule_create,
 )
 
 if TYPE_CHECKING:
@@ -40,15 +50,21 @@ def register_local_tools(registry: ToolRegistry, *, replace: bool = False) -> No
 
 __all__ = [
     "DOUBAO_SEARCH_TOOL_NAME",
+    "HOT_TOPIC_SEARCH_TOOL_NAME",
     "TOPIC_MARKDOWN_READ_DETAIL_TOOL_NAME",
     "TOPIC_MARKDOWN_READ_SUMMARY_TOOL_NAME",
     "TOPIC_MARKDOWN_STORE_TOOL_NAME",
+    "TOPIC_SCHEDULE_CREATE_TOOL_NAME",
     "doubao_search",
+    "hot_topic_search",
     "register_doubao_search_tool",
+    "register_hot_topic_search_tool",
     "register_local_tools",
     "register_topic_markdown_read_tools",
     "register_topic_markdown_store_tool",
+    "register_topic_schedule_create_tool",
     "topic_markdown_read_detail",
     "topic_markdown_read_summary",
     "topic_markdown_store",
+    "topic_schedule_create",
 ]
