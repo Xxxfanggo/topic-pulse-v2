@@ -979,6 +979,9 @@ def create_app(
                             break
                         if event.type == "status":
                             stage = event.data.get("stage")
+                            if stage == "scope_gate":
+                                yield _stream_event("status", text="正在判断请求范围")
+                                continue
                             if stage == "session_ready":
                                 yield _stream_event("session", session_id=event.session_id or "")
                                 continue
