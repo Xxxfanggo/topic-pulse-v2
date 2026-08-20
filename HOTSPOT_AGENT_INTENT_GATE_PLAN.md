@@ -360,22 +360,22 @@ cron 每日固定时间
 
 ### 第一阶段：先建立硬门禁
 
-- 在 Web、Terminal 共享入口前加入 Scope Gateway。
-- 先使用规则 + 固定拒答/澄清。
-- 只允许 `HOTSPOT_*` 请求进入现有 ReActAgent。
-- 为同步和流式接口分别覆盖拒答路径。
+- [x] 在 Web、Terminal 共用的 `ReactChatService` 入口加入 Scope Gateway 能力。
+- [x] 使用规则 + 固定拒答/澄清。
+- [x] 只允许 `HOTSPOT_*` 请求进入现有 ReActAgent。
+- [x] 为同步和流式接口分别覆盖拒答路径。
 
 ### 第二阶段：补充语义分类
 
-- 规则无法判断时再调用分类 LLM。
-- 使用严格 JSON schema、置信度阈值和 fail-closed 策略。
-- 将 `intent_gate` 写入现有 trace。
+- [x] 规则无法判断时再调用独立分类 LLM。
+- [x] 使用结构化 JSON 校验、`0.85` 置信度阈值和 fail-closed 策略。
+- [x] 将 `intent_gate` 写入现有 trace。
 
 ### 第三阶段：完善每日热点能力
 
-- 新增服务端受信任的 `daily_hotspot_digest` 调度任务。
-- 区分“发现全网新热点”和“刷新已关注话题”。
-- 为日报结果增加独立的存储和前端展示约定，避免混入普通聊天历史。
+- [ ] 新增服务端受信任的 `daily_hotspot_digest` 调度任务。
+- [ ] 区分“发现全网新热点”和“刷新已关注话题”。
+- [ ] 为日报结果增加独立的存储和前端展示约定，避免混入普通聊天历史。
 
 ## 13. 最终建议
 
@@ -393,3 +393,35 @@ cron 每日固定时间
 
 > 对无关问题，系统在调用主 LLM、创建 Agent session、暴露工具之前就已经返回固定拒答。
 
+## 14. 实施变更记录
+
+### 2026-08-20：完成阶段一、阶段二
+
+本次实施前，先将工作区中原有的已跟踪文件改动恢复到 Git HEAD；随后只保留本次范围控制功能相关的新增和修改。
+
+已完成的修改动作：
+
+1. 新增 `src/topic_pulse_v2/scope/` 包，定义 `IntentGate` 和 `IntentDecision`。
+2. 增加规则分类：明确热点请求直接允许，明确无关请求直接拒绝，无法判断的请求进入语义分类或澄清。
+3. 在 `ReactChatService.chat()` 和 `chat_stream()` 前置执行范围判断。
+4. 对 `OFF_TOPIC` 返回固定拒答，对 `AMBIGUOUS` 返回固定澄清；两条路径均不进入 ReActAgent，不创建新的 Agent session，不调用工具。
+5. 为模糊请求接入独立分类 LLM 调用，分类请求不携带工具，仅允许输出分类 JSON。
+6. 增加意图枚举、置信度范围、JSON 解析和置信度阈值校验；分类失败时按 fail-closed 策略澄清。
+7. 对 `refresh_topic` 等服务端 Scheduler 请求增加受信任路由，避免定时刷新被用户范围门禁误拦截。
+8. 为流式拒答增加 `scope_gate` 状态和兼容现有 `result` 事件的返回路径。
+9. 将分类意图、决策、置信度、来源和版本写入现有 `intent_gate` trace 事件。
+10. 新增 `tests/test_intent_gate.py`，覆盖规则分类、分类 LLM、低置信度、非法 JSON、Scheduler 信任路由及同步/流式门禁行为。
+
+本次涉及文件：
+
+```text
+src/topic_pulse_v2/scope/__init__.py
+src/topic_pulse_v2/scope/intent_gate.py
+src/topic_pulse_v2_chat/web/react_service.py
+src/topic_pulse_v2_chat/web/app.py
+tests/test_intent_gate.py
+```
+
+验证结果：新增及相关回归测试共 21 项通过，4 项 Web service 测试因当前环境缺少 FastAPI 被跳过；完整测试集仍需要安装 `fastapi`、`langchain-core` 和 `langchain-openai` 后再执行。
+
+阶段三尚未实施。本次没有新增每日主动热点发现任务、日报存储或通知推送能力。

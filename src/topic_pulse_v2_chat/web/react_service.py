@@ -17,13 +17,14 @@ from topic_pulse_v2.process import (
     ReActStreamEvent,
 )
 from topic_pulse_v2.session import SessionManager, SQLiteSessionStore
+from topic_pulse_v2.scope import CLARIFY_REPLY, OFF_TOPIC_REPLY, IntentDecision, IntentGate
 from topic_pulse_v2.tool_register import ToolRegistry
 
 
 class ReactChatService:
     """Small singleton wrapper around the ReAct runtime used by FastAPI."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, intent_gate: IntentGate | None = None) -> None:
         self._lock = Lock()
         self._llm_client = LLMClient(
             {"minimax": MiniMaxLLMProvider()},
@@ -46,6 +47,11 @@ class ReactChatService:
             session_manager=self._session_manager,
             config=self._config,
         )
+        self._intent_gate = intent_gate or IntentGate(
+            classifier_client=self._llm_client,
+            classifier_provider="minimax",
+            trace_log_path=self._config.trace_log_path,
+        )
 
     def chat(
         self,
@@ -57,12 +63,19 @@ class ReactChatService:
     ) -> ReActResult:
         # Session state is still process-local, so keep chat turns serialized.
         with self._lock:
+            decision = self._intent_gate.classify(
+                message,
+                metadata=metadata,
+                session_id=session_id,
+            )
+            if not decision.allowed:
+                return self._scope_result(decision, session_id=session_id)
             return self._agent.run(
                 user_id=user_id,
-                query=message,
+                query=decision.normalized_query,
                 session_id=session_id,
                 provider="minimax",
-                metadata=metadata,
+                metadata=self._agent_metadata(metadata, decision),
             )
 
     def chat_stream(
@@ -75,13 +88,56 @@ class ReactChatService:
     ) -> Iterator[ReActStreamEvent]:
         # Session state is still process-local, so keep the whole stream serialized.
         with self._lock:
+            decision = self._intent_gate.classify(
+                message,
+                metadata=metadata,
+                session_id=session_id,
+            )
+            if not decision.allowed:
+                result = self._scope_result(decision, session_id=session_id)
+                yield ReActStreamEvent(
+                    type="status",
+                    session_id=session_id,
+                    data={"stage": "scope_gate", **decision.metadata()},
+                )
+                yield ReActStreamEvent(
+                    type="result",
+                    session_id=session_id,
+                    data=decision.metadata(),
+                    result=result,
+                )
+                return
             yield from self._agent.stream(
                 user_id=user_id,
-                query=message,
+                query=decision.normalized_query,
                 session_id=session_id,
                 provider="minimax",
-                metadata=metadata,
+                metadata=self._agent_metadata(metadata, decision),
             )
+
+    @staticmethod
+    def _agent_metadata(
+        metadata: dict[str, Any] | None,
+        decision: IntentDecision,
+    ) -> dict[str, Any]:
+        enriched = dict(metadata or {})
+        enriched.update(decision.metadata())
+        return enriched
+
+    @staticmethod
+    def _scope_result(
+        decision: IntentDecision,
+        *,
+        session_id: str | None,
+    ) -> ReActResult:
+        answer = OFF_TOPIC_REPLY if decision.decision == "REJECT" else CLARIFY_REPLY
+        return ReActResult(
+            answer=answer,
+            session_id=session_id,
+            steps=[],
+            completed=True,
+            metadata={"scope_gate": decision.metadata()},
+        )
 
 
 def react_result_steps_to_dict(result: ReActResult) -> list[dict[str, Any]]:
